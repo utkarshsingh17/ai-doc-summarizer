@@ -1,0 +1,90 @@
+spring:
+  application:
+    name: ai-doc-qna
+
+  datasource:
+    url: jdbc:postgresql://localhost:5434/ai_doc_qna
+    username: ai_doc_qna
+    password: ai_doc_qna
+
+  jpa:
+    hibernate:
+      # Flyway owns the schema. `validate` fails fast when an entity and a migration disagree.
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    validate-on-migrate: true
+    out-of-order: false
+
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+  data:
+    web:
+      pageable:
+        default-page-size: 20
+        # Without a cap, one request can pull the whole table.
+        max-page-size: 100
+
+  threads:
+    virtual:
+      enabled: true
+
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY}
+      chat:
+        # Spring AI 2.0 flattened these — there is no `.options` segment any more.
+        model: gpt-4o-mini
+        temperature: 0.0   # 2.0 removed the implicit 0.7 default; grounded QA wants determinism
+        max-tokens: 1024
+      embedding:
+        model: text-embedding-3-small
+    vectorstore:
+      pgvector:
+        # The schema comes from Flyway (V3), not from the store.
+        initialize-schema: false
+        dimensions: 1536
+        index-type: hnsw
+        distance-type: cosine_distance
+
+app:
+  storage:
+    endpoint: http://localhost:9000
+    region: us-east-1
+    bucket: ai-doc-qna
+    access-key: ${MINIO_ACCESS_KEY:minioadmin}
+    secret-key: ${MINIO_SECRET_KEY:minioadmin}
+    # MinIO serves buckets as a path, not a subdomain. Set false for real AWS S3.
+    path-style-access: true
+  ingestion:
+    chunk-size-tokens: 800
+    min-chunk-size-chars: 350
+    max-file-size-bytes: 52428800   # 50 MB, mirrors spring.servlet.multipart
+    allowed-content-types:
+      - application/pdf
+      - text/plain
+      - text/markdown
+  qa:
+    top-k: 6
+    # Cosine similarity floor. Below this, chunks are treated as irrelevant and the
+    # question is refused without spending a chat call.
+    similarity-threshold: 0.45
+    max-snippet-chars: 320
+
+logging:
+  level:
+    com.utkarsh.ai_doc_qna: DEBUG
+
+server:
+  error:
+    include-message: never
