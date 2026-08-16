@@ -47,7 +47,8 @@ class QaServiceTest {
                 null,
                 null,
                 new AppProperties.Qa(6, 0.45, 80),
-                new AppProperties.Jwt("c2VjcmV0LWZvci10ZXN0cy1vbmx5LWF0LWxlYXN0LTMyLWJ5dGVzIQ==", 900000, 604800000, false));
+                new AppProperties.Jwt("c2VjcmV0LWZvci10ZXN0cy1vbmx5LWF0LWxlYXN0LTMyLWJ5dGVzIQ==", 900000, 604800000, false),
+                null);
         qaService = new QaService(retrievalService, answerGenerator, documentService, properties);
     }
 

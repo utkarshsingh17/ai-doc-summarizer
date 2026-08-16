@@ -5,9 +5,11 @@ import com.utkarsh.ai_doc_qna.auth.UserPrincipal;
 import com.utkarsh.ai_doc_qna.common.exception.DocumentNotFoundException;
 import com.utkarsh.ai_doc_qna.common.exception.DuplicateDocumentException;
 import com.utkarsh.ai_doc_qna.common.exception.UnsupportedFileTypeException;
+import com.utkarsh.ai_doc_qna.config.AppProperties;
 import com.utkarsh.ai_doc_qna.config.SecurityConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
@@ -49,6 +51,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @WebMvcTest(DocumentController.class)
 @Import(SecurityConfig.class)
+@EnableConfigurationProperties(AppProperties.class)
 class DocumentControllerTest {
 
     private static final UUID OWNER_ID = UUID.fromString("99999999-8888-7777-6666-555555555555");
@@ -145,6 +148,17 @@ class DocumentControllerTest {
 
         mockMvc.perform(delete("/api/v1/documents/{id}", id).with(auth()))
                 .andExpect(status().isNotFound());
+    }
+
+    /**
+     * A framework-level exception ({@code MethodArgumentTypeMismatchException}) previously got
+     * swallowed by the catch-all {@code Exception} handler and surfaced as a misleading 500.
+     */
+    @Test
+    void get_withInvalidUuidPathVariable_shouldReturn400NotInternalError() throws Exception {
+        mockMvc.perform(get("/api/v1/documents/{id}", "not-a-uuid").with(auth()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_PARAMETER"));
     }
 
     private static RequestPostProcessor auth() {
