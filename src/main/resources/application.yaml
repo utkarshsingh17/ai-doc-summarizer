@@ -80,6 +80,14 @@ app:
     # question is refused without spending a chat call.
     similarity-threshold: 0.45
     max-snippet-chars: 320
+  jwt:
+    # Dev-only fallback (decodes to 256 bits) so local runs and tests don't require setting
+    # JWT_SECRET. Always override this in any shared or production environment.
+    secret: ${JWT_SECRET:ZGV2LW9ubHktand0LXNlY3JldC1kby1ub3QtdXNlLWluLXByb2R1Y3Rpb24hISE=}
+    access-token-expiry-ms: 900000      # 15 minutes
+    refresh-token-expiry-ms: 604800000  # 7 days
+    # False so local http://localhost dev works. Any real deployment must set COOKIE_SECURE=true.
+    cookie-secure: ${COOKIE_SECURE:false}
 
 logging:
   level:

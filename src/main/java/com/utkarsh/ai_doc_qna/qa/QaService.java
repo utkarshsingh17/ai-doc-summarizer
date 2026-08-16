@@ -16,6 +16,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * Answers a question using only the uploaded corpus, and reports which excerpts it used.
@@ -56,31 +57,46 @@ public class QaService {
     }
 
 
-    public AnswerResponse ask(String question) {
-        List<Document> chunks = retrievalService.retrieve(question);
+    public AnswerResponse ask(String question, UUID ownerId) {
+        List<Document> chunks = retrievalService.retrieve(question, ownerId);
+        return answer(question, chunks, () -> noMatchMessage(ownerId));
+    }
 
+    /**
+     * Same grounded-answer flow as {@link #ask}, narrowed to one document. {@code documentId}
+     * must belong to {@code ownerId} — {@link DocumentService#get} throws
+     * {@link com.utkarsh.ai_doc_qna.common.exception.DocumentNotFoundException} otherwise, which
+     * is also the correct response for "exists but is someone else's": existence is not leaked.
+     */
+    public AnswerResponse askAboutDocument(String question, UUID documentId, UUID ownerId) {
+        documentService.get(documentId, ownerId);
+        List<Document> chunks = retrievalService.retrieveForDocument(question, documentId);
+        return answer(question, chunks, () -> NO_MATCH_MESSAGE);
+    }
+
+    private AnswerResponse answer(String question, List<Document> chunks, Supplier<String> noMatchMessage) {
         // Nothing cleared the similarity floor, so there is nothing to ground an answer in.
         // Refusing here is both the correct answer and one saved chat call.
         if (chunks.isEmpty()) {
             log.debug("No chunks above threshold; refusing without a chat call");
-            return new AnswerResponse(question, noMatchMessage(), false, List.of(), 0);
+            return new AnswerResponse(question, noMatchMessage.get(), false, List.of(), 0);
         }
 
-        GroundedAnswer answer = answerGenerator.generate(question, buildNumberedContext(chunks));
+        GroundedAnswer generated = answerGenerator.generate(question, buildNumberedContext(chunks));
 
-        if (!answer.answerable()) {
-            return new AnswerResponse(question, answer.answer(), false, List.of(), chunks.size());
+        if (!generated.answerable()) {
+            return new AnswerResponse(question, generated.answer(), false, List.of(), chunks.size());
         }
-        return new AnswerResponse(question, answer.answer(), true,
-                toCitations(answer.usedSources(), chunks), chunks.size());
+        return new AnswerResponse(question, generated.answer(), true,
+                toCitations(generated.usedSources(), chunks), chunks.size());
     }
 
     /**
      * "Not in your documents" is the wrong thing to say when nothing has been uploaded yet, or
      * when the answer is sitting in a file that is still being embedded.
      */
-    private String noMatchMessage() {
-        CorpusStatus corpus = documentService.corpusStatus();
+    private String noMatchMessage(UUID ownerId) {
+        CorpusStatus corpus = documentService.corpusStatus(ownerId);
         if (corpus.isEmpty()) {
             return NO_DOCUMENTS_MESSAGE;
         }

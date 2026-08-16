@@ -53,6 +53,13 @@ public class SourceDocument {
     @Column(name = "storage_key", nullable = false, length = 1024)
     private String storageKey;
 
+    /**
+     * Nullable in the schema only because rows created before ownership existed have none —
+     * {@link #create} always requires it for anything uploaded from here on.
+     */
+    @Column(name = "owner_id")
+    private UUID ownerId;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 32)
     private IngestionStatus status;
@@ -76,13 +83,14 @@ public class SourceDocument {
     }
 
     public static SourceDocument create(String filename, String contentType, long sizeBytes,
-                                        String checksum, String storageKey) {
+                                        String checksum, String storageKey, UUID ownerId) {
         SourceDocument document = new SourceDocument();
         document.filename = Objects.requireNonNull(filename, "filename");
         document.contentType = Objects.requireNonNull(contentType, "contentType");
         document.sizeBytes = sizeBytes;
         document.checksum = Objects.requireNonNull(checksum, "checksum");
         document.storageKey = Objects.requireNonNull(storageKey, "storageKey");
+        document.ownerId = Objects.requireNonNull(ownerId, "ownerId");
         document.status = IngestionStatus.PENDING;
         document.chunkCount = 0;
         return document;
@@ -135,6 +143,10 @@ public class SourceDocument {
 
     public String getStorageKey() {
         return storageKey;
+    }
+
+    public UUID getOwnerId() {
+        return ownerId;
     }
 
     public IngestionStatus getStatus() {

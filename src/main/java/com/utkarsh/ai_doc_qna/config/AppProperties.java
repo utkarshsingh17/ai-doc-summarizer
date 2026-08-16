@@ -21,7 +21,8 @@ import java.util.Set;
 public record AppProperties(
         @Valid Storage storage,
         @Valid Ingestion ingestion,
-        @Valid Qa qa) {
+        @Valid Qa qa,
+        @Valid Jwt jwt) {
 
     public record Storage(
             @NotBlank String endpoint,
@@ -44,5 +45,16 @@ public record AppProperties(
             @Min(1) int topK,
             @DecimalMin("0.0") @DecimalMax("1.0") double similarityThreshold,
             @Min(50) int maxSnippetChars) {
+    }
+
+    public record Jwt(
+            /* Base64-encoded HMAC-SHA256 key; must decode to at least 256 bits. */
+            @NotBlank String secret,
+            @Positive long accessTokenExpiryMs,
+            @Positive long refreshTokenExpiryMs,
+            /* Cookie Secure attribute. False for local http:// dev; must be true wherever the app
+             * is actually reachable over the network, or browsers will still send the cookie over
+             * plain HTTP. */
+            boolean cookieSecure) {
     }
 }

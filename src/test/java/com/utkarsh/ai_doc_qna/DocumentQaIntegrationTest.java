@@ -1,11 +1,13 @@
 package com.utkarsh.ai_doc_qna;
 
+import com.utkarsh.ai_doc_qna.auth.UserRepository;
 import com.utkarsh.ai_doc_qna.document.IngestionStatus;
 import com.utkarsh.ai_doc_qna.document.SourceDocument;
 import com.utkarsh.ai_doc_qna.document.SourceDocumentRepository;
 import com.utkarsh.ai_doc_qna.qa.QaService;
 import com.utkarsh.ai_doc_qna.qa.dto.AnswerResponse;
 import com.utkarsh.ai_doc_qna.qa.dto.CitationResponse;
+import com.utkarsh.ai_doc_qna.support.AuthTestSupport;
 import com.utkarsh.ai_doc_qna.support.StubAiConfiguration;
 import com.utkarsh.ai_doc_qna.support.TestcontainersConfiguration;
 import org.junit.jupiter.api.BeforeEach;
@@ -62,6 +64,9 @@ class DocumentQaIntegrationTest {
     private SourceDocumentRepository repository;
 
     @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
     private QaService qaService;
 
     @Autowired
@@ -70,10 +75,13 @@ class DocumentQaIntegrationTest {
     @Autowired
     private StubAiConfiguration.StubChatResponses chatResponses;
 
+    private AuthTestSupport.Registered user;
+
     @BeforeEach
-    void resetCorpus() {
+    void resetCorpus() throws Exception {
         repository.deleteAll();
         jdbcTemplate.update("DELETE FROM vector_store");
+        user = AuthTestSupport.register(mockMvc, userRepository);
     }
 
     @Test
@@ -87,7 +95,7 @@ class DocumentQaIntegrationTest {
         assertThat(countChunks()).isEqualTo(ingested.getChunkCount());
 
         chatResponses.reply("Up to three days per week.", true, "1");
-        AnswerResponse answer = qaService.ask("How many remote days are allowed?");
+        AnswerResponse answer = qaService.ask("How many remote days are allowed?", user.userId());
 
         assertThat(answer.answerable()).isTrue();
         assertThat(answer.retrievedChunks()).isPositive();
@@ -109,7 +117,7 @@ class DocumentQaIntegrationTest {
         awaitCompletion(uploadPolicy());
 
         chatResponses.reply("The documents do not mention parental leave.", false, "");
-        AnswerResponse answer = qaService.ask("What is the parental leave policy?");
+        AnswerResponse answer = qaService.ask("What is the parental leave policy?", user.userId());
 
         assertThat(answer.answerable()).isFalse();
         assertThat(answer.citations()).isEmpty();
@@ -121,7 +129,7 @@ class DocumentQaIntegrationTest {
         awaitCompletion(documentId);
         assertThat(countChunks()).isPositive();
 
-        mockMvc.perform(delete("/api/v1/documents/{id}", documentId))
+        mockMvc.perform(delete("/api/v1/documents/{id}", documentId).cookie(user.accessCookie()))
                 .andExpect(status().isNoContent());
 
         assertThat(repository.findById(documentId)).isEmpty();
@@ -145,7 +153,7 @@ class DocumentQaIntegrationTest {
         assertThat(note.getErrorMessage()).isNull();
 
         chatResponses.reply("hunter2", true, "1");
-        AnswerResponse answer = qaService.ask("What is the wifi password?");
+        AnswerResponse answer = qaService.ask("What is the wifi password?", user.userId());
         assertThat(answer.citations()).hasSize(1);
         assertThat(answer.citations().getFirst().snippet()).contains("hunter2");
     }
@@ -154,7 +162,8 @@ class DocumentQaIntegrationTest {
     void reuploadingTheSameContentIsRejected() throws Exception {
         awaitCompletion(uploadPolicy());
 
-        mockMvc.perform(multipart("/api/v1/documents").file(policyFile()))
+        mockMvc.perform(multipart("/api/v1/documents").file(policyFile())
+                        .cookie(user.accessCookie()))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("DUPLICATE_DOCUMENT"));
     }
@@ -164,7 +173,8 @@ class DocumentQaIntegrationTest {
     }
 
     private UUID upload(MockMultipartFile file) throws Exception {
-        String body = mockMvc.perform(multipart("/api/v1/documents").file(file))
+        String body = mockMvc.perform(multipart("/api/v1/documents").file(file)
+                        .cookie(user.accessCookie()))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.data.status").value("PENDING"))
                 .andReturn().getResponse().getContentAsString();
