@@ -64,7 +64,7 @@ public class DocumentService {
      * commit on a background thread, so a large PDF does not hold the HTTP request open.
      */
     @Transactional
-    public SourceDocument upload(MultipartFile file) {
+    public SourceDocument upload(MultipartFile file, UUID ownerId) {
         if (file.isEmpty()) {
             throw new IllegalArgumentException("Uploaded file is empty");
         }
@@ -82,9 +82,10 @@ public class DocumentService {
         }
 
         // Hashing the content first means a re-upload is rejected before it costs an object write
-        // or, worse, a second copy of every chunk in the vector store.
+        // or, worse, a second copy of every chunk in the vector store. Scoped to the owner: the
+        // same content uploaded by a different user is not a duplicate.
         String checksum = checksum(file);
-        repository.findByChecksum(checksum).ifPresent(existing -> {
+        repository.findByOwnerIdAndChecksum(ownerId, checksum).ifPresent(existing -> {
             throw new DuplicateDocumentException(existing.getId(), existing.getFilename());
         });
 
@@ -99,7 +100,7 @@ public class DocumentService {
         deleteObjectOnRollback(storageKey);
 
         SourceDocument document = repository.save(
-                SourceDocument.create(filename, contentType, file.getSize(), checksum, storageKey));
+                SourceDocument.create(filename, contentType, file.getSize(), checksum, storageKey, ownerId));
         eventPublisher.publishEvent(new DocumentUploadedEvent(document.getId()));
 
         log.info("Accepted upload {} ({} bytes) as document {}", filename, file.getSize(), document.getId());
@@ -107,20 +108,25 @@ public class DocumentService {
     }
 
     @Transactional(readOnly = true)
-    public Page<SourceDocument> list(Pageable pageable) {
-        return repository.findAll(pageable);
+    public Page<SourceDocument> list(Pageable pageable, UUID ownerId) {
+        return repository.findAllByOwnerId(ownerId, pageable);
+    }
+
+    /**
+     * Scoped to the owner rather than a plain {@code findById} + separate ownership check: a
+     * document that exists but belongs to someone else looks exactly like one that does not
+     * exist, so it cannot be used to enumerate other users' document ids.
+     */
+    @Transactional(readOnly = true)
+    public SourceDocument get(UUID id, UUID ownerId) {
+        return repository.findByIdAndOwnerId(id, ownerId).orElseThrow(() -> new DocumentNotFoundException(id));
     }
 
     @Transactional(readOnly = true)
-    public SourceDocument get(UUID id) {
-        return repository.findById(id).orElseThrow(() -> new DocumentNotFoundException(id));
-    }
-
-    @Transactional(readOnly = true)
-    public CorpusStatus corpusStatus() {
-        long inProgress = repository.countByStatus(IngestionStatus.PENDING)
-                + repository.countByStatus(IngestionStatus.PROCESSING);
-        return new CorpusStatus(repository.count(), inProgress);
+    public CorpusStatus corpusStatus(UUID ownerId) {
+        long inProgress = repository.countByOwnerIdAndStatus(ownerId, IngestionStatus.PENDING)
+                + repository.countByOwnerIdAndStatus(ownerId, IngestionStatus.PROCESSING);
+        return new CorpusStatus(repository.countByOwnerId(ownerId), inProgress);
     }
 
     /**
@@ -128,8 +134,9 @@ public class DocumentService {
      * row is gone but whose chunks linger would keep producing citations that resolve to nothing.
      */
     @Transactional
-    public void delete(UUID id) {
-        SourceDocument document = repository.findById(id).orElseThrow(() -> new DocumentNotFoundException(id));
+    public void delete(UUID id, UUID ownerId) {
+        SourceDocument document = repository.findByIdAndOwnerId(id, ownerId)
+                .orElseThrow(() -> new DocumentNotFoundException(id));
 
         vectorStore.delete("%s == '%s'".formatted(ChunkMetadata.DOCUMENT_ID, document.getId()));
         storage.delete(document.getStorageKey());

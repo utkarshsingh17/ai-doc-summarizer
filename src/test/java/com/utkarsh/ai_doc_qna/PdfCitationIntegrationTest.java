@@ -1,10 +1,12 @@
 package com.utkarsh.ai_doc_qna;
 
+import com.utkarsh.ai_doc_qna.auth.UserRepository;
 import com.utkarsh.ai_doc_qna.document.IngestionStatus;
 import com.utkarsh.ai_doc_qna.document.SourceDocumentRepository;
 import com.utkarsh.ai_doc_qna.qa.QaService;
 import com.utkarsh.ai_doc_qna.qa.dto.AnswerResponse;
 import com.utkarsh.ai_doc_qna.qa.dto.CitationResponse;
+import com.utkarsh.ai_doc_qna.support.AuthTestSupport;
 import com.utkarsh.ai_doc_qna.support.StubAiConfiguration;
 import com.utkarsh.ai_doc_qna.support.TestcontainersConfiguration;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -34,9 +36,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Covers the PDF path specifically: page numbers only exist because
- * {@code PagePdfDocumentReader} stamps them, and they are what makes a citation point at a
- * section rather than at a whole file.
+ * Covers the PDF path specifically. Parsing goes through {@code TikaDocumentReader}, which
+ * returns one {@code Document} for the whole file — no per-page split, no page number — so a PDF
+ * citation points at a filename, not a section.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -59,6 +61,9 @@ class PdfCitationIntegrationTest {
     private SourceDocumentRepository repository;
 
     @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
     private QaService qaService;
 
     @Autowired
@@ -67,35 +72,41 @@ class PdfCitationIntegrationTest {
     @Autowired
     private StubAiConfiguration.StubChatResponses chatResponses;
 
+    private AuthTestSupport.Registered user;
+
     @BeforeEach
-    void resetCorpus() {
+    void resetCorpus() throws Exception {
         repository.deleteAll();
         jdbcTemplate.update("DELETE FROM vector_store");
+        user = AuthTestSupport.register(mockMvc, userRepository);
     }
 
     @Test
-    void pdfChunksCarryPageNumbersThroughToCitations() throws Exception {
+    void pdfIsParsedAsOneDocumentAndCitesTheFileWithoutAPageNumber() throws Exception {
         UUID documentId = uploadPdf();
 
         await().atMost(Duration.ofSeconds(30)).pollInterval(Duration.ofMillis(200)).untilAsserted(() ->
                 assertThat(repository.findById(documentId).orElseThrow().getStatus())
                         .isEqualTo(IngestionStatus.COMPLETED));
 
-        // One chunk per page, since each page is well under the chunk size.
-        assertThat(repository.findById(documentId).orElseThrow().getChunkCount()).isEqualTo(PAGES.size());
+        // All three pages land in one Document (Tika does not split per page), and that text is
+        // well under the chunk size, so ingestion produces exactly one chunk.
+        assertThat(repository.findById(documentId).orElseThrow().getChunkCount()).isEqualTo(1);
 
-        chatResponses.reply("Up to three days each week.", true, "1,2,3");
-        AnswerResponse answer = qaService.ask("What does the policy say?");
+        chatResponses.reply("Up to three days each week.", true, "1");
+        AnswerResponse answer = qaService.ask("What does the policy say?", user.userId());
 
-        assertThat(answer.citations()).hasSize(3);
-        assertThat(answer.citations()).allSatisfy(citation -> {
-            assertThat(citation.filename()).isEqualTo("handbook.pdf");
-            assertThat(citation.documentId()).isEqualTo(documentId);
-            assertThat(citation.pageNumber()).isNotNull();
-        });
-        // Every page of the source is represented, and page numbers are 1-based.
-        assertThat(answer.citations().stream().map(CitationResponse::pageNumber))
-                .containsExactlyInAnyOrder(1, 2, 3);
+        assertThat(answer.citations()).hasSize(1);
+        CitationResponse citation = answer.citations().getFirst();
+        assertThat(citation.filename()).isEqualTo("handbook.pdf");
+        assertThat(citation.documentId()).isEqualTo(documentId);
+        // No page-level metadata without PagePdfDocumentReader — the citation names the file only.
+        assertThat(citation.pageNumber()).isNull();
+        // The chunk still carries every page's text, just without a page boundary.
+        assertThat(citation.snippet())
+                .contains("Eligibility")
+                .contains("Equipment")
+                .contains("Core hours");
     }
 
     @Test
@@ -124,7 +135,8 @@ class PdfCitationIntegrationTest {
     }
 
     private UUID upload(MockMultipartFile file) throws Exception {
-        String body = mockMvc.perform(multipart("/api/v1/documents").file(file))
+        String body = mockMvc.perform(multipart("/api/v1/documents").file(file)
+                        .cookie(user.accessCookie()))
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         return UUID.fromString(body.replaceAll(".*\"id\"\\s*:\\s*\"([^\"]+)\".*", "$1"));

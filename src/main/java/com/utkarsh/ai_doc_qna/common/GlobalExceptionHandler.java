@@ -3,13 +3,18 @@ package com.utkarsh.ai_doc_qna.common;
 import com.utkarsh.ai_doc_qna.common.exception.AiServiceException;
 import com.utkarsh.ai_doc_qna.common.exception.DocumentNotFoundException;
 import com.utkarsh.ai_doc_qna.common.exception.DuplicateDocumentException;
+import com.utkarsh.ai_doc_qna.common.exception.DuplicateEmailException;
+import com.utkarsh.ai_doc_qna.common.exception.InvalidCredentialsException;
+import com.utkarsh.ai_doc_qna.common.exception.InvalidTokenException;
 import com.utkarsh.ai_doc_qna.common.exception.StorageException;
 import com.utkarsh.ai_doc_qna.common.exception.UnsupportedFileTypeException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestCookieException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
@@ -38,6 +43,41 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleUnsupportedType(UnsupportedFileTypeException ex) {
         return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
                 .body(ApiResponse.error("UNSUPPORTED_FILE_TYPE", ex.getMessage()));
+    }
+
+    @ExceptionHandler(DuplicateEmailException.class)
+    public ResponseEntity<ApiResponse<Void>> handleDuplicateEmail(DuplicateEmailException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.error("EMAIL_ALREADY_REGISTERED", ex.getMessage()));
+    }
+
+    @ExceptionHandler(InvalidCredentialsException.class)
+    public ResponseEntity<ApiResponse<Void>> handleInvalidCredentials(InvalidCredentialsException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ApiResponse.error("INVALID_CREDENTIALS", ex.getMessage()));
+    }
+
+    @ExceptionHandler(InvalidTokenException.class)
+    public ResponseEntity<ApiResponse<Void>> handleInvalidToken(InvalidTokenException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ApiResponse.error("INVALID_TOKEN", ex.getMessage()));
+    }
+
+    /**
+     * Thrown when {@code POST /auth/refresh} arrives without a {@code refresh_token} cookie —
+     * not authenticated, not a malformed request.
+     */
+    @ExceptionHandler(MissingRequestCookieException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMissingCookie(MissingRequestCookieException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ApiResponse.error("UNAUTHORIZED", "Authentication required"));
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUnsupportedMediaType(HttpMediaTypeNotSupportedException ex) {
+        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+                .body(ApiResponse.error("UNSUPPORTED_MEDIA_TYPE",
+                        "Request Content-Type '" + ex.getContentType() + "' is not supported"));
     }
 
     @ExceptionHandler(MaxUploadSizeExceededException.class)

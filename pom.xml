@@ -27,7 +27,7 @@
 		<url/>
 	</scm>
 	<properties>
-		<java.version>26</java.version>
+		<java.version>25</java.version>
 		<spring-ai.version>2.0.0</spring-ai.version>
 		<aws-sdk.version>2.35.9</aws-sdk.version>
 		<testcontainers.version>1.21.3</testcontainers.version>
@@ -74,6 +74,29 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-validation</artifactId>
 		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-security</artifactId>
+		</dependency>
+
+		<!-- JWT issuing/parsing. Version pinned: not managed by the Boot 4.1 parent BOM. -->
+		<dependency>
+			<groupId>io.jsonwebtoken</groupId>
+			<artifactId>jjwt-api</artifactId>
+			<version>0.12.6</version>
+		</dependency>
+		<dependency>
+			<groupId>io.jsonwebtoken</groupId>
+			<artifactId>jjwt-impl</artifactId>
+			<version>0.12.6</version>
+			<scope>runtime</scope>
+		</dependency>
+		<dependency>
+			<groupId>io.jsonwebtoken</groupId>
+			<artifactId>jjwt-jackson</artifactId>
+			<version>0.12.6</version>
+			<scope>runtime</scope>
+		</dependency>
 
 		<!-- Flyway is no longer transitive via the JPA starter in Boot 4, and the
 		     database-specific module is mandatory or startup fails. -->
@@ -100,9 +123,13 @@
 			<groupId>org.springframework.ai</groupId>
 			<artifactId>spring-ai-starter-vector-store-pgvector</artifactId>
 		</dependency>
+		<!-- Tika auto-detects format and handles pdf/txt/md plus anything else Tika supports
+		     (docx, pptx, html, rtf, odt, ...) through one reader. Trade-off: unlike
+		     PagePdfDocumentReader, it returns one Document per file with no page_number metadata,
+		     so PDF citations no longer carry a page number. -->
 		<dependency>
 			<groupId>org.springframework.ai</groupId>
-			<artifactId>spring-ai-pdf-document-reader</artifactId>
+			<artifactId>spring-ai-tika-document-reader</artifactId>
 		</dependency>
 
 		<!-- Object storage. AWS SDK v2 talks to MinIO and real S3 alike. -->
@@ -111,9 +138,34 @@
 			<artifactId>s3</artifactId>
 		</dependency>
 
-		<!-- Deliberately no Lombok: 1.18.46 silently generates nothing on JDK 26, so
-		     @Getter/@Slf4j would compile away to missing symbols. Records and explicit
-		     constructors cover what it would have done. -->
+		<!-- No Lombok, on JDK 25 or 26: 1.18.46 (the newest release) generates nothing at all
+		     for any class it touches — no error, just missing symbols — the instant javac sees a
+		     version-targeting flag: the "release" flag, or even plain source/target flags set to
+		     match the running JDK exactly. Maven's compiler plugin always passes one of these
+		     (Boot's parent sets maven.compiler.release), so this isn't avoidable from a Maven
+		     build. Verified directly: invoking javac with no version flags at all works fine,
+		     which is what makes this easy to "verify" wrongly — that mode never occurs in a real
+		     build. Re-check both empirically (not from the changelog) before reintroducing, using
+		     the exact flags Maven passes. -->
+
+		<!-- Auto-starts/stops compose.yaml (postgres + minio) around the app lifecycle
+		     for local runs, so `spring-boot:run` no longer needs a manual `docker compose up`
+		     first. Optional so it never ships in a deployed artifact. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-docker-compose</artifactId>
+			<optional>true</optional>
+		</dependency>
+
+		<!-- Builds PDF fixtures directly in PdfCitationIntegrationTest. Pinned explicitly rather
+		     than relying on whatever version spring-ai-tika-document-reader happens to pull in
+		     transitively, so a Tika upgrade can't silently break test compilation. -->
+		<dependency>
+			<groupId>org.apache.pdfbox</groupId>
+			<artifactId>pdfbox</artifactId>
+			<version>3.0.7</version>
+			<scope>test</scope>
+		</dependency>
 
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -123,6 +175,11 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-webmvc-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-test</artifactId>
 			<scope>test</scope>
 		</dependency>
 		<dependency>

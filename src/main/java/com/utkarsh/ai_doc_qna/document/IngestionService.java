@@ -6,8 +6,7 @@ import com.utkarsh.ai_doc_qna.storage.DocumentStorage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
-import org.springframework.ai.reader.TextReader;
-import org.springframework.ai.reader.pdf.PagePdfDocumentReader;
+import org.springframework.ai.reader.tika.TikaDocumentReader;
 import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.core.io.InputStreamResource;
@@ -36,8 +35,6 @@ import java.util.UUID;
 public class IngestionService {
 
     private static final Logger log = LoggerFactory.getLogger(IngestionService.class);
-
-    private static final String PDF_CONTENT_TYPE = "application/pdf";
 
     private final SourceDocumentRepository repository;
     private final IngestionStatusWriter statusWriter;
@@ -94,7 +91,11 @@ public class IngestionService {
             statusWriter.apply(documentId, doc -> doc.markCompleted(chunks.size()));
             log.info("Ingested document {} into {} chunks in {} ms",
                     documentId, chunks.size(), System.currentTimeMillis() - startedAt);
-        } catch (Exception ex) {
+        } catch (Exception | StackOverflowError ex) {
+            // StackOverflowError is caught alongside Exception, not left to the async executor's
+            // default handler: the tokenizer's regex-based pretokenizer recurses per match, and a
+            // large enough page of text can blow the stack. Without this, the document would be
+            // stuck at PROCESSING forever instead of visibly FAILED.
             log.error("Ingestion failed for document {}", documentId, ex);
             statusWriter.apply(documentId, doc -> doc.markFailed(describe(ex)));
         }
@@ -110,7 +111,8 @@ public class IngestionService {
                 .build();
         List<Document> chunks = splitter.apply(parsed);
 
-        // The splitter copies each parent's metadata onto its chunks, so page_number survives.
+        // The splitter copies each parent's metadata onto its chunks. Tika returns one Document
+        // per file with no page_number, so citations from here on carry a filename but no page.
         // We add the ownership and ordering keys here.
         List<Document> stamped = new ArrayList<>(chunks.size());
         for (int index = 0; index < chunks.size(); index++) {
@@ -122,6 +124,7 @@ public class IngestionService {
                     // from document + position keeps chunks distinct and re-ingestion idempotent.
                     .id(chunkId(document.getId(), index))
                     .metadata(ChunkMetadata.DOCUMENT_ID, document.getId().toString())
+                    .metadata(ChunkMetadata.OWNER_ID, document.getOwnerId().toString())
                     .metadata(ChunkMetadata.FILENAME, document.getFilename())
                     .metadata(ChunkMetadata.CHUNK_INDEX, index)
                     .build());
@@ -132,12 +135,7 @@ public class IngestionService {
     private List<Document> parse(SourceDocument document) {
         try (InputStream content = storage.retrieve(document.getStorageKey())) {
             Resource resource = new InputStreamResource(content);
-            if (PDF_CONTENT_TYPE.equals(document.getContentType())) {
-                // PagePdfDocumentReader stamps page_number on every page, which is what makes
-                // page-level citations possible.
-                return new PagePdfDocumentReader(resource).get();
-            }
-            return new TextReader(resource).get();
+            return new TikaDocumentReader(resource).get();
         } catch (Exception ex) {
             throw new IllegalStateException("Failed to parse " + document.getFilename(), ex);
         }
@@ -148,7 +146,7 @@ public class IngestionService {
                 (documentId + ":" + index).getBytes(StandardCharsets.UTF_8)).toString();
     }
 
-    private static String describe(Exception ex) {
+    private static String describe(Throwable ex) {
         Throwable root = ex;
         while (root.getCause() != null && root.getCause() != root) {
             root = root.getCause();

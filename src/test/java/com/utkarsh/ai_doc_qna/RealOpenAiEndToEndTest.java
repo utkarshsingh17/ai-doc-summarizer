@@ -1,9 +1,11 @@
 package com.utkarsh.ai_doc_qna;
 
+import com.utkarsh.ai_doc_qna.auth.UserRepository;
 import com.utkarsh.ai_doc_qna.document.IngestionStatus;
 import com.utkarsh.ai_doc_qna.document.SourceDocumentRepository;
 import com.utkarsh.ai_doc_qna.qa.QaService;
 import com.utkarsh.ai_doc_qna.qa.dto.AnswerResponse;
+import com.utkarsh.ai_doc_qna.support.AuthTestSupport;
 import com.utkarsh.ai_doc_qna.support.TestcontainersConfiguration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -65,19 +67,26 @@ class RealOpenAiEndToEndTest {
     private SourceDocumentRepository repository;
 
     @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
     private QaService qaService;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    private AuthTestSupport.Registered user;
+
     @BeforeEach
     void ingestPolicy() throws Exception {
         repository.deleteAll();
         jdbcTemplate.update("DELETE FROM vector_store");
+        user = AuthTestSupport.register(mockMvc, userRepository);
 
         String body = mockMvc.perform(multipart("/api/v1/documents")
                         .file(new MockMultipartFile("file", "policy.txt",
-                                MediaType.TEXT_PLAIN_VALUE, POLICY.getBytes())))
+                                MediaType.TEXT_PLAIN_VALUE, POLICY.getBytes()))
+                        .cookie(user.accessCookie()))
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
         UUID documentId = UUID.fromString(body.replaceAll(".*\"id\"\\s*:\\s*\"([^\"]+)\".*", "$1"));
@@ -89,7 +98,7 @@ class RealOpenAiEndToEndTest {
 
     @Test
     void answersAnInCorpusQuestionAndCitesTheDocument() {
-        AnswerResponse answer = qaService.ask("How many days per week can employees work remotely?");
+        AnswerResponse answer = qaService.ask("How many days per week can employees work remotely?", user.userId());
 
         assertThat(answer.answerable()).isTrue();
         assertThat(answer.answer()).containsIgnoringCase("three");
@@ -99,7 +108,7 @@ class RealOpenAiEndToEndTest {
 
     @Test
     void refusesAnOutOfCorpusQuestionInsteadOfHallucinating() {
-        AnswerResponse answer = qaService.ask("Who won the 1998 FIFA World Cup?");
+        AnswerResponse answer = qaService.ask("Who won the 1998 FIFA World Cup?", user.userId());
 
         assertThat(answer.answerable()).isFalse();
         assertThat(answer.citations()).isEmpty();
@@ -108,7 +117,7 @@ class RealOpenAiEndToEndTest {
 
     @Test
     void refusesAQuestionAboutATopicTheDocumentDoesNotCover() {
-        AnswerResponse answer = qaService.ask("What is the parental leave entitlement?");
+        AnswerResponse answer = qaService.ask("What is the parental leave entitlement?", user.userId());
 
         assertThat(answer.answerable()).isFalse();
         assertThat(answer.citations()).isEmpty();
@@ -118,6 +127,7 @@ class RealOpenAiEndToEndTest {
     void answersViaTheHttpEndpointWithCitations() throws Exception {
         mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
                         .post("/api/v1/questions")
+                        .cookie(user.accessCookie())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"question\":\"What is the desk chair allowance?\"}"))
                 .andExpect(status().isOk())

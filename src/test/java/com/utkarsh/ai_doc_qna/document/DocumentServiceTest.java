@@ -32,6 +32,8 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class DocumentServiceTest {
 
+    private static final UUID OWNER_ID = UUID.fromString("99999999-8888-7777-6666-555555555555");
+
     @Mock
     private SourceDocumentRepository repository;
 
@@ -53,31 +55,33 @@ class DocumentServiceTest {
                         "key", "secret", true),
                 new AppProperties.Ingestion(800, 350, 1024 * 1024,
                         Set.of("application/pdf", "text/plain", "text/markdown")),
-                new AppProperties.Qa(6, 0.45, 320));
+                new AppProperties.Qa(6, 0.45, 320),
+                new AppProperties.Jwt("c2VjcmV0LWZvci10ZXN0cy1vbmx5LWF0LWxlYXN0LTMyLWJ5dGVzIQ==", 900000, 604800000, false));
         documentService = new DocumentService(repository, storage, vectorStore, eventPublisher, properties);
     }
 
     @Test
     void upload_withNewFile_shouldStoreItAndPublishAnIngestionEvent() {
-        when(repository.findByChecksum(anyString())).thenReturn(Optional.empty());
+        when(repository.findByOwnerIdAndChecksum(any(), anyString())).thenReturn(Optional.empty());
         when(repository.save(any(SourceDocument.class))).thenAnswer(call -> call.getArgument(0));
 
-        SourceDocument saved = documentService.upload(textFile("policy.txt", "remote work policy"));
+        SourceDocument saved = documentService.upload(textFile("policy.txt", "remote work policy"), OWNER_ID);
 
         assertThat(saved.getFilename()).isEqualTo("policy.txt");
         assertThat(saved.getContentType()).isEqualTo("text/plain");
         assertThat(saved.getStatus()).isEqualTo(IngestionStatus.PENDING);
         assertThat(saved.getChunkCount()).isZero();
+        assertThat(saved.getOwnerId()).isEqualTo(OWNER_ID);
         verify(storage).store(anyString(), any(), anyLong(), anyString());
         verify(eventPublisher).publishEvent(any(DocumentUploadedEvent.class));
     }
 
     @Test
     void upload_shouldNamespaceTheStorageKeySoIdenticalFilenamesDoNotCollide() {
-        when(repository.findByChecksum(anyString())).thenReturn(Optional.empty());
+        when(repository.findByOwnerIdAndChecksum(any(), anyString())).thenReturn(Optional.empty());
         when(repository.save(any(SourceDocument.class))).thenAnswer(call -> call.getArgument(0));
 
-        documentService.upload(textFile("policy.txt", "contents"));
+        documentService.upload(textFile("policy.txt", "contents"), OWNER_ID);
 
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
         verify(storage).store(key.capture(), any(), anyLong(), anyString());
@@ -85,11 +89,11 @@ class DocumentServiceTest {
     }
 
     @Test
-    void upload_whenChecksumAlreadyExists_shouldRejectBeforeTouchingStorage() {
-        SourceDocument existing = SourceDocument.create("policy.txt", "text/plain", 10, "abc", "key");
-        when(repository.findByChecksum(anyString())).thenReturn(Optional.of(existing));
+    void upload_whenChecksumAlreadyExistsForTheSameOwner_shouldRejectBeforeTouchingStorage() {
+        SourceDocument existing = SourceDocument.create("policy.txt", "text/plain", 10, "abc", "key", OWNER_ID);
+        when(repository.findByOwnerIdAndChecksum(any(), anyString())).thenReturn(Optional.of(existing));
 
-        assertThatThrownBy(() -> documentService.upload(textFile("policy.txt", "remote work policy")))
+        assertThatThrownBy(() -> documentService.upload(textFile("policy.txt", "remote work policy"), OWNER_ID))
                 .isInstanceOf(DuplicateDocumentException.class);
 
         // Re-ingesting a duplicate would double its chunks and skew retrieval.
@@ -104,27 +108,27 @@ class DocumentServiceTest {
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 "content".getBytes());
 
-        assertThatThrownBy(() -> documentService.upload(file))
+        assertThatThrownBy(() -> documentService.upload(file, OWNER_ID))
                 .isInstanceOf(UnsupportedFileTypeException.class);
         verifyNoInteractions(storage);
     }
 
     @Test
     void upload_whenBrowserSendsOctetStreamForMarkdown_shouldResolveTypeFromTheExtension() {
-        when(repository.findByChecksum(anyString())).thenReturn(Optional.empty());
+        when(repository.findByOwnerIdAndChecksum(any(), anyString())).thenReturn(Optional.empty());
         when(repository.save(any(SourceDocument.class))).thenAnswer(call -> call.getArgument(0));
 
         MockMultipartFile file = new MockMultipartFile(
                 "file", "notes.md", "application/octet-stream", "# Notes".getBytes());
 
-        assertThat(documentService.upload(file).getContentType()).isEqualTo("text/markdown");
+        assertThat(documentService.upload(file, OWNER_ID).getContentType()).isEqualTo("text/markdown");
     }
 
     @Test
     void upload_withEmptyFile_shouldBeRejected() {
         MockMultipartFile file = new MockMultipartFile("file", "empty.txt", "text/plain", new byte[0]);
 
-        assertThatThrownBy(() -> documentService.upload(file))
+        assertThatThrownBy(() -> documentService.upload(file, OWNER_ID))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -133,29 +137,30 @@ class DocumentServiceTest {
         byte[] tooBig = new byte[2 * 1024 * 1024]; // limit is 1 MB in these test properties
         MockMultipartFile file = new MockMultipartFile("file", "big.txt", "text/plain", tooBig);
 
-        assertThatThrownBy(() -> documentService.upload(file))
+        assertThatThrownBy(() -> documentService.upload(file, OWNER_ID))
                 .isInstanceOf(IllegalArgumentException.class);
         verifyNoInteractions(storage);
     }
 
     @Test
     void upload_shouldStripPathTraversalFromTheFilename() {
-        when(repository.findByChecksum(anyString())).thenReturn(Optional.empty());
+        when(repository.findByOwnerIdAndChecksum(any(), anyString())).thenReturn(Optional.empty());
         when(repository.save(any(SourceDocument.class))).thenAnswer(call -> call.getArgument(0));
 
         MockMultipartFile file = new MockMultipartFile(
                 "file", "../../etc/passwd.txt", "text/plain", "content".getBytes());
 
-        assertThat(documentService.upload(file).getFilename()).isEqualTo("passwd.txt");
+        assertThat(documentService.upload(file, OWNER_ID).getFilename()).isEqualTo("passwd.txt");
     }
 
     @Test
     void delete_shouldRemoveChunksObjectAndRow() {
-        SourceDocument document = SourceDocument.create("policy.txt", "text/plain", 10, "abc", "documents/x/policy.txt");
+        SourceDocument document = SourceDocument.create(
+                "policy.txt", "text/plain", 10, "abc", "documents/x/policy.txt", OWNER_ID);
         UUID id = UUID.randomUUID();
-        when(repository.findById(id)).thenReturn(Optional.of(document));
+        when(repository.findByIdAndOwnerId(id, OWNER_ID)).thenReturn(Optional.of(document));
 
-        documentService.delete(id);
+        documentService.delete(id, OWNER_ID);
 
         ArgumentCaptor<String> filter = ArgumentCaptor.forClass(String.class);
         verify(vectorStore).delete(filter.capture());
@@ -167,9 +172,19 @@ class DocumentServiceTest {
     @Test
     void get_whenIdIsUnknown_shouldThrowNotFound() {
         UUID id = UUID.randomUUID();
-        when(repository.findById(id)).thenReturn(Optional.empty());
+        when(repository.findByIdAndOwnerId(id, OWNER_ID)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> documentService.get(id)).isInstanceOf(DocumentNotFoundException.class);
+        assertThatThrownBy(() -> documentService.get(id, OWNER_ID)).isInstanceOf(DocumentNotFoundException.class);
+    }
+
+    @Test
+    void get_whenDocumentBelongsToAnotherOwner_shouldThrowNotFound() {
+        UUID id = UUID.randomUUID();
+        // The repository query itself is owner-scoped, so another owner's document simply
+        // never matches — same as it not existing at all.
+        when(repository.findByIdAndOwnerId(id, OWNER_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> documentService.get(id, OWNER_ID)).isInstanceOf(DocumentNotFoundException.class);
     }
 
     private static MockMultipartFile textFile(String name, String content) {

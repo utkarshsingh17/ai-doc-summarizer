@@ -3,6 +3,7 @@ package com.utkarsh.ai_doc_qna.qa;
 import com.openai.errors.OpenAIException;
 import com.utkarsh.ai_doc_qna.common.exception.AiServiceException;
 import com.utkarsh.ai_doc_qna.config.AppProperties;
+import com.utkarsh.ai_doc_qna.document.ChunkMetadata;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
@@ -11,6 +12,7 @@ import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Explicit vector retrieval.
@@ -33,7 +35,23 @@ public class RetrievalService {
     }
 
 
-    public List<Document> retrieve(String question) {
+    /**
+     * Searches only the given owner's chunks — a question is never answered from another user's
+     * uploads. {@code owner_id} is stamped onto every chunk at ingestion time for exactly this.
+     */
+    public List<Document> retrieve(String question, UUID ownerId) {
+        return search(question, "%s == '%s'".formatted(ChunkMetadata.OWNER_ID, ownerId));
+    }
+
+    /**
+     * Searches only the given document's chunks. The caller is responsible for having already
+     * verified the requester owns that document — this filters by document, not by owner.
+     */
+    public List<Document> retrieveForDocument(String question, UUID documentId) {
+        return search(question, "%s == '%s'".formatted(ChunkMetadata.DOCUMENT_ID, documentId));
+    }
+
+    private List<Document> search(String question, String filterExpression) {
         AppProperties.Qa config = properties.qa();
         List<Document> chunks;
         try {
@@ -45,6 +63,7 @@ public class RetrievalService {
                     // Anything below the floor is treated as irrelevant rather than padding the
                     // prompt with noise the model might latch onto.
                     .similarityThreshold(config.similarityThreshold())
+                    .filterExpression(filterExpression)
                     .build());
         } catch (OpenAIException ex) {
             throw AiServiceException.translate("Failed to embed the question for retrieval", ex);
