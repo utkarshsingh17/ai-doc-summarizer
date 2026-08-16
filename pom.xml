@@ -131,6 +131,19 @@
 			<groupId>org.springframework.ai</groupId>
 			<artifactId>spring-ai-tika-document-reader</artifactId>
 		</dependency>
+		<!-- tika-parser-pdf-module's own POM does not actually pull in PDFBox's core parsing
+		     engine (org.apache.pdfbox:pdfbox — PDDocument, PDFTextStripper): it depends on
+		     pdfbox-tools, whose POM lists only pdfbox-debugger/commons-io/picocli, not pdfbox
+		     itself. Without this, Tika silently extracts zero text from every PDF — no exception,
+		     no log line, just an empty Document — because its PDF parser initialization swallows
+		     the missing class rather than failing loudly. `mvn dependency:tree
+		     -Dincludes=org.apache.pdfbox` must show this at compile/runtime scope, not only from
+		     a test-scoped declaration — that gap is exactly what caused this bug once already. -->
+		<dependency>
+			<groupId>org.apache.pdfbox</groupId>
+			<artifactId>pdfbox</artifactId>
+			<version>3.0.7</version>
+		</dependency>
 
 		<!-- Object storage. AWS SDK v2 talks to MinIO and real S3 alike. -->
 		<dependency>
@@ -157,15 +170,6 @@
 			<optional>true</optional>
 		</dependency>
 
-		<!-- Builds PDF fixtures directly in PdfCitationIntegrationTest. Pinned explicitly rather
-		     than relying on whatever version spring-ai-tika-document-reader happens to pull in
-		     transitively, so a Tika upgrade can't silently break test compilation. -->
-		<dependency>
-			<groupId>org.apache.pdfbox</groupId>
-			<artifactId>pdfbox</artifactId>
-			<version>3.0.7</version>
-			<scope>test</scope>
-		</dependency>
 
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
