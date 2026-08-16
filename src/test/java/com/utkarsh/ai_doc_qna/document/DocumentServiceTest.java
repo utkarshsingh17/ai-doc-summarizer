@@ -56,7 +56,8 @@ class DocumentServiceTest {
                 new AppProperties.Ingestion(800, 350, 1024 * 1024,
                         Set.of("application/pdf", "text/plain", "text/markdown")),
                 new AppProperties.Qa(6, 0.45, 320),
-                new AppProperties.Jwt("c2VjcmV0LWZvci10ZXN0cy1vbmx5LWF0LWxlYXN0LTMyLWJ5dGVzIQ==", 900000, 604800000, false));
+                new AppProperties.Jwt("c2VjcmV0LWZvci10ZXN0cy1vbmx5LWF0LWxlYXN0LTMyLWJ5dGVzIQ==", 900000, 604800000, false),
+                null);
         documentService = new DocumentService(repository, storage, vectorStore, eventPublisher, properties);
     }
 

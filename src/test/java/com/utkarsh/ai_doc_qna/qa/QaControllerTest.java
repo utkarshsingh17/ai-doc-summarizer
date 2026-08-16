@@ -4,11 +4,13 @@ import com.utkarsh.ai_doc_qna.auth.JwtService;
 import com.utkarsh.ai_doc_qna.auth.UserPrincipal;
 import com.utkarsh.ai_doc_qna.common.exception.AiServiceException;
 import com.utkarsh.ai_doc_qna.common.exception.DocumentNotFoundException;
+import com.utkarsh.ai_doc_qna.config.AppProperties;
 import com.utkarsh.ai_doc_qna.config.SecurityConfig;
 import com.utkarsh.ai_doc_qna.qa.dto.AnswerResponse;
 import com.utkarsh.ai_doc_qna.qa.dto.CitationResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
@@ -24,6 +26,7 @@ import java.util.UUID;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -35,6 +38,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @WebMvcTest(QaController.class)
 @Import(SecurityConfig.class)
+@EnableConfigurationProperties(AppProperties.class)
 class QaControllerTest {
 
     private static final UUID OWNER_ID = UUID.fromString("99999999-8888-7777-6666-555555555555");
@@ -160,6 +164,28 @@ class QaControllerTest {
                         .content("{\"question\":\"anything\"}"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("DOCUMENT_NOT_FOUND"));
+    }
+
+    /**
+     * A framework-level exception ({@code HttpRequestMethodNotSupportedException}) previously got
+     * swallowed by the catch-all {@code Exception} handler and surfaced as a misleading 500.
+     */
+    @Test
+    void ask_withWrongHttpMethod_shouldReturn405NotInternalError() throws Exception {
+        mockMvc.perform(get("/api/v1/questions").with(auth()))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(jsonPath("$.error.code").value("METHOD_NOT_ALLOWED"));
+    }
+
+    /** Same swallowed-exception class as the wrong-method case, for a malformed body instead. */
+    @Test
+    void ask_withMalformedJsonBody_shouldReturn400NotInternalError() throws Exception {
+        mockMvc.perform(post("/api/v1/questions")
+                        .with(auth())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"question\": not valid json"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("MALFORMED_REQUEST_BODY"));
     }
 
     private static RequestPostProcessor auth() {

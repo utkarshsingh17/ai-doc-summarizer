@@ -83,6 +83,18 @@ Citations name the file but never a page. This also means the splitter's tokeniz
 whole file's text in one string rather than one page at a time — keep that in mind before blaming
 a large-document failure on something else.
 
+**`org.apache.pdfbox:pdfbox` (the actual PDF text-extraction engine) must be a compile-scope
+dependency in `pom.xml`, not just present transitively.** `tika-parser-pdf-module`'s own POM pulls
+in `pdfbox-tools`, whose POM lists `pdfbox-debugger`/`commons-io`/`picocli` — not `pdfbox` core
+itself. Without it, every PDF silently extracts to an empty `Document` — no exception, no log
+line, just an empty-chunks "No extractable text found" failure indistinguishable from a genuinely
+scanned file. `./mvnw test` will not catch a regression here: Testcontainers/`PdfCitationIntegrationTest`
+builds and parses a real PDF, but if `pdfbox` is ever declared at `test` scope instead of
+compile/default scope, the test classpath has it and passes while `spring-boot:run`'s runtime
+classpath does not — this exact thing happened once already. Verify with
+`mvn dependency:tree -Dincludes=org.apache.pdfbox` and confirm `pdfbox:jar:...:compile`, not
+`:test`, whenever touching Tika or PDFBox dependencies.
+
 **Auth tokens live in `HttpOnly` cookies, not `Authorization` headers.** `access_token`
 (`Path=/`) and `refresh_token` (`Path=/api/v1/auth/refresh`), both `SameSite=Lax`. Nothing comes
 back in the JSON body from `/auth/register`, `/auth/login`, or `/auth/refresh` — an XSS bug or an

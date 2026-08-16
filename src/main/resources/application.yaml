@@ -88,6 +88,10 @@ app:
     refresh-token-expiry-ms: 604800000  # 7 days
     # False so local http://localhost dev works. Any real deployment must set COOKIE_SECURE=true.
     cookie-secure: ${COOKIE_SECURE:false}
+  cors:
+    # Vite's default dev port. Override/extend with a comma-separated list via CORS_ALLOWED_ORIGINS
+    # for any other frontend origin (a different dev port, a deployed frontend domain, etc.).
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
 
 logging:
   level:

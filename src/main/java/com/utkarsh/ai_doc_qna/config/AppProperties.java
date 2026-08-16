@@ -22,7 +22,8 @@ public record AppProperties(
         @Valid Storage storage,
         @Valid Ingestion ingestion,
         @Valid Qa qa,
-        @Valid Jwt jwt) {
+        @Valid Jwt jwt,
+        @Valid Cors cors) {
 
     public record Storage(
             @NotBlank String endpoint,
@@ -56,5 +57,14 @@ public record AppProperties(
              * is actually reachable over the network, or browsers will still send the cookie over
              * plain HTTP. */
             boolean cookieSecure) {
+    }
+
+    /**
+     * The frontend is a separate origin (its own dev server / deployment), so cookie-carrying
+     * cross-origin requests need explicit CORS — {@code Access-Control-Allow-Origin} can never be
+     * {@code *} together with credentials, so every allowed origin must be listed exactly.
+     */
+    public record Cors(
+            @NotEmpty Set<String> allowedOrigins) {
     }
 }
