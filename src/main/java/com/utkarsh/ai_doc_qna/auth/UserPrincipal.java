@@ -29,7 +29,7 @@ public final class UserPrincipal implements UserDetails {
     }
 
     public static UserPrincipal of(User user) {
-        return new UserPrincipal(user.getId(), user.getEmail(), user.getPasswordHash());
+        return new UserPrincipal(user.id(), user.email(), user.passwordHash());
     }
 
     public UUID getId() {

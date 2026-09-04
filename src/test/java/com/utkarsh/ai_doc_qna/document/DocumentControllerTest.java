@@ -71,7 +71,7 @@ class DocumentControllerTest {
     @Test
     void upload_withValidFile_shouldReturn201AndPendingStatus() throws Exception {
         when(documentService.upload(any(), eq(OWNER_ID))).thenReturn(
-                SourceDocument.create("policy.pdf", "application/pdf", 1024, "abc", "documents/x/policy.pdf", OWNER_ID));
+                SourceDocument.create("policy.pdf", "application/pdf", 1024, "abc", OWNER_ID));
 
         mockMvc.perform(multipart("/api/v1/documents").file(pdf()).with(auth()))
                 .andExpect(status().isCreated())
@@ -107,7 +107,7 @@ class DocumentControllerTest {
     @Test
     void list_shouldReturnPaginationEnvelopeRatherThanRawSpringDataPage() throws Exception {
         Page<SourceDocument> page = new PageImpl<>(
-                List.of(SourceDocument.create("a.pdf", "application/pdf", 1, "c1", "k1", OWNER_ID)),
+                List.of(SourceDocument.create("a.pdf", "application/pdf", 1, "c1", OWNER_ID)),
                 PageRequest.of(0, 20), 1);
         when(documentService.list(any(), eq(OWNER_ID))).thenReturn(page);
 

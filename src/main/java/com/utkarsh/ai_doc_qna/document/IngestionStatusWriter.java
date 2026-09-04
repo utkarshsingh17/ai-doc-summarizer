@@ -1,18 +1,17 @@
 package com.utkarsh.ai_doc_qna.document;
 
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.UUID;
 import java.util.function.Consumer;
 
 /**
- * Writes ingestion status transitions in their own transactions.
+ * Applies and persists an ingestion status transition.
  *
- * <p>This is a separate bean on purpose: calling a {@code @Transactional} method from another
- * method of the same class bypasses the proxy, so the new transaction would never start and a
- * failure part-way through ingestion would roll back the {@code FAILED} marker along with it.
+ * <p>A separate bean mainly for symmetry with the mutation call sites in {@link IngestionService}
+ * — there is no transactional proxy to bypass here the way there was under JPA, since
+ * {@link QdrantSourceDocumentRepository#updateStatus} is a single, immediately-visible point
+ * update rather than something that needs its own transaction to survive a later failure.
  */
 @Component
 public class IngestionStatusWriter {
@@ -24,8 +23,10 @@ public class IngestionStatusWriter {
     }
 
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void apply(UUID documentId, Consumer<SourceDocument> mutation) {
-        repository.findById(documentId).ifPresent(mutation);
+        repository.findById(documentId).ifPresent(document -> {
+            mutation.accept(document);
+            repository.updateStatus(document);
+        });
     }
 }

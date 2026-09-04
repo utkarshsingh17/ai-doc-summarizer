@@ -2,21 +2,18 @@ package com.utkarsh.ai_doc_qna.document;
 
 import com.utkarsh.ai_doc_qna.config.AppProperties;
 import com.utkarsh.ai_doc_qna.config.AsyncConfig;
-import com.utkarsh.ai_doc_qna.storage.DocumentStorage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.reader.tika.TikaDocumentReader;
 import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.VectorStore;
-import org.springframework.core.io.InputStreamResource;
+import org.springframework.context.event.EventListener;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.event.TransactionPhase;
-import org.springframework.transaction.event.TransactionalEventListener;
 
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -26,10 +23,9 @@ import java.util.UUID;
 /**
  * Turns a stored file into embedded, searchable chunks.
  *
- * <p>Runs after the upload transaction commits and on a background thread, so the uploader gets an
- * immediate response while parsing and embedding proceed. Status transitions go through
- * {@link IngestionStatusWriter} in their own transactions, so progress and failures are visible to
- * {@code GET /documents/{id}} while the work is still running.
+ * <p>Runs on a background thread so the uploader gets an immediate response while parsing and
+ * embedding proceed. Status transitions go through {@link IngestionStatusWriter}, so progress and
+ * failures are visible to {@code GET /documents/{id}} while the work is still running.
  */
 @Service
 public class IngestionService {
@@ -38,35 +34,27 @@ public class IngestionService {
 
     private final SourceDocumentRepository repository;
     private final IngestionStatusWriter statusWriter;
-    private final DocumentStorage storage;
     private final VectorStore vectorStore;
     private final AppProperties properties;
 
     public IngestionService(SourceDocumentRepository repository,
                             IngestionStatusWriter statusWriter,
-                            DocumentStorage storage,
                             VectorStore vectorStore,
                             AppProperties properties) {
         this.repository = repository;
         this.statusWriter = statusWriter;
-        this.storage = storage;
         this.vectorStore = vectorStore;
         this.properties = properties;
     }
 
 
-    /**
-     * {@code AFTER_COMMIT} is essential — on any earlier phase the worker thread could start
-     * before the row is visible to other connections and find nothing to ingest.
-     */
     @Async(AsyncConfig.INGESTION_EXECUTOR)
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @EventListener
     public void onDocumentUploaded(DocumentUploadedEvent event) {
         ingest(event.documentId());
     }
 
     public void ingest(UUID documentId) {
-        // Read-only lookup; Spring Data opens its own transaction for it.
         Optional<SourceDocument> found = repository.findById(documentId);
         if (found.isEmpty()) {
             log.warn("Document {} disappeared before ingestion started", documentId);
@@ -120,7 +108,7 @@ public class IngestionService {
             stamped.add(chunk.mutate()
                     // Document's default id is a hash of its content, so two chunks with identical
                     // text (repeated headers, boilerplate) would collide and the store's
-                    // ON CONFLICT DO UPDATE would silently merge them. A deterministic id derived
+                    // upsert-by-id behavior would silently merge them. A deterministic id derived
                     // from document + position keeps chunks distinct and re-ingestion idempotent.
                     .id(chunkId(document.getId(), index))
                     .metadata(ChunkMetadata.DOCUMENT_ID, document.getId().toString())
@@ -133,8 +121,9 @@ public class IngestionService {
     }
 
     private List<Document> parse(SourceDocument document) {
-        try (InputStream content = storage.retrieve(document.getStorageKey())) {
-            Resource resource = new InputStreamResource(content);
+        try {
+            byte[] content = repository.loadContent(document.getId());
+            Resource resource = new ByteArrayResource(content);
             return new TikaDocumentReader(resource).get();
         } catch (Exception ex) {
             throw new IllegalStateException("Failed to parse " + document.getFilename(), ex);

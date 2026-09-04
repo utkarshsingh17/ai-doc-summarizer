@@ -2,12 +2,24 @@ package com.utkarsh.ai_doc_qna.document;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.Optional;
 import java.util.UUID;
 
-public interface SourceDocumentRepository extends JpaRepository<SourceDocument, UUID> {
+public interface SourceDocumentRepository {
+
+    /** Creates a new document, storing the raw uploaded bytes alongside its metadata. */
+    SourceDocument save(SourceDocument document, byte[] content);
+
+    /**
+     * Persists an ingestion-status transition on an existing document, without touching its
+     * stored content.
+     */
+    void updateStatus(SourceDocument document);
+
+    Optional<SourceDocument> findById(UUID id);
+
+    Optional<SourceDocument> findByIdAndOwnerId(UUID id, UUID ownerId);
 
     /**
      * Scoped to the owner: identical content uploaded by two different users is not a duplicate
@@ -15,13 +27,16 @@ public interface SourceDocumentRepository extends JpaRepository<SourceDocument, 
      */
     Optional<SourceDocument> findByOwnerIdAndChecksum(UUID ownerId, String checksum);
 
-    long countByStatus(IngestionStatus status);
-
     long countByOwnerId(UUID ownerId);
 
     long countByOwnerIdAndStatus(UUID ownerId, IngestionStatus status);
 
     Page<SourceDocument> findAllByOwnerId(UUID ownerId, Pageable pageable);
 
-    Optional<SourceDocument> findByIdAndOwnerId(UUID id, UUID ownerId);
+    /** The raw bytes of the originally uploaded file. */
+    byte[] loadContent(UUID id);
+
+    void delete(SourceDocument document);
+
+    void deleteAll();
 }

@@ -4,7 +4,8 @@ Upload PDFs, policies, manuals or notes, then ask questions that are answered **
 you uploaded — with citations back to the exact source section. Every account only ever sees,
 uploads to, or asks questions about its own documents.
 
-Built on Spring Boot 4.1, Spring AI 2.0, PostgreSQL + pgvector, and S3-compatible object storage.
+Built on Spring Boot 4.1 and Spring AI 2.0. Qdrant is the only datastore — accounts, document
+metadata, the originally uploaded files, and chunk embeddings all live there.
 
 ## How it answers with citations
 
@@ -30,7 +31,7 @@ impossible. Instead:
   ```bash
   export JAVA_HOME=/opt/homebrew/opt/openjdk@25/libexec/openjdk.jdk/Contents/Home
   ```
-- **Docker** — for Postgres/pgvector, MinIO, and the Testcontainers-backed tests.
+- **Docker** — for Qdrant and the Testcontainers-backed tests.
 - **An OpenAI API key** — only to run the app. The test suite does not need one.
 
 ## Running it
@@ -41,12 +42,12 @@ export OPENAI_API_KEY=sk-...
 ./mvnw spring-boot:run
 ```
 
-Postgres and MinIO start automatically — `spring-boot-docker-compose` brings `compose.yaml` up
-before the app context refreshes and tears it down on shutdown. (`docker compose up -d` still
-works if you want the containers running independently of the app.) Postgres uses **5434** because
-5433 is already taken on this machine. Flyway creates the schema — `users`, `source_documents`,
-the pgvector `vector_store` table — on startup, and the MinIO bucket is created automatically on
-first run.
+Qdrant starts automatically — `spring-boot-docker-compose` brings `compose.yaml` up before the app
+context refreshes and tears it down on shutdown. (`docker compose up -d` still works if you want it
+running independently of the app.) The app creates its three collections on startup: `vector_store`
+(chunk embeddings, via Spring AI's `initialize-schema: true`) and `users`/`documents` (accounts and
+document metadata + raw file bytes, via `QdrantCollectionsInitializer`). Qdrant's dashboard is at
+`http://localhost:6333/dashboard` if you want to poke at collections directly.
 
 ## API
 
@@ -97,11 +98,13 @@ exist (404, not 403, so its existence is never revealed).
 | `POST` | `/api/v1/documents` | multipart `file`; returns 201 with status `PENDING` |
 | `GET` | `/api/v1/documents` | paginated (`?page=&size=&sort=`), page size capped at 100 |
 | `GET` | `/api/v1/documents/{id}` | ingestion status, chunk count, failure reason |
-| `DELETE` | `/api/v1/documents/{id}` | 204; removes chunks and the stored object too |
+| `DELETE` | `/api/v1/documents/{id}` | 204; removes the document's chunks and its stored bytes |
 
 Uploads accept PDF, TXT and MD up to 50 MB. Re-uploading identical content **for the same
 account** returns 409 rather than duplicating chunks — the same file uploaded by two different
-accounts is not a conflict.
+accounts is not a conflict. This check is a plain query-then-write, not a database constraint (there
+is no database), so it has a narrow race window under truly concurrent identical uploads — see
+[Notable constraints](#notable-constraints).
 
 ```bash
 curl -b cookies.txt -F file=@handbook.pdf localhost:8080/api/v1/documents
@@ -212,7 +215,7 @@ Every non-2xx response uses the same envelope with `error.code`/`error.message`/
 | `EMAIL_ALREADY_REGISTERED` | 409 | Email already has an account |
 | `UNSUPPORTED_MEDIA_TYPE` / `UNSUPPORTED_FILE_TYPE` | 415 | Wrong `Content-Type`, or a file type outside `app.ingestion.allowed-content-types` |
 | `FILE_TOO_LARGE` | 413 | Over `app.ingestion.max-file-size-bytes` |
-| `STORAGE_UNAVAILABLE` | 503 | Object storage (MinIO/S3) unreachable |
+| `STORAGE_UNAVAILABLE` | 503 | Qdrant unreachable (holds accounts, document metadata/bytes, and chunks alike) |
 | `AI_UNAVAILABLE` | 503 | Model provider unreachable after retries |
 | `AI_REQUEST_FAILED` | 502 | Model provider rejected the request (e.g. bad key) |
 | `INTERNAL_ERROR` | 500 | Unhandled exception |
@@ -223,19 +226,20 @@ Upload responds immediately; parsing and embedding run on a bounded background p
 100-page PDF never holds an HTTP request open.
 
 ```
-POST /documents → validate → SHA-256 (dedupe per account) → store object → row as PENDING → 201
-                                    ↓ after commit, on a worker thread
+POST /documents → validate → SHA-256 (dedupe per account) → upsert point (metadata + bytes,
+                                                              status PENDING) → 201
+                                    ↓ event fires immediately, on a worker thread
               PROCESSING → parse → split → embed → vector store → COMPLETED (or FAILED + reason)
 ```
 
-The listener fires on `AFTER_COMMIT` — on any earlier phase the worker could start before the row
-is visible and find nothing to ingest. Parsing goes through Apache Tika (`TikaDocumentReader`),
-which handles PDF/TXT/MD uniformly and could parse far more formats than that if
-`app.ingestion.allowed-content-types` allowed them through. The trade-off: Tika returns one
-`Document` per file with no per-page split, so **citations no longer carry a page number** for any
-file type — `pageNumber` in every citation is `null`. A scanned, image-only PDF (or any file with
-no extractable text) yields no text and is marked `FAILED` with an OCR hint rather than silently
-"completing" as a document that answers nothing.
+Metadata and the raw uploaded bytes are written together as one Qdrant point, so there is no
+separate object store to keep in sync and no "row exists but the file didn't get written" failure
+mode. Parsing goes through Apache Tika (`TikaDocumentReader`), which handles PDF/TXT/MD uniformly
+and could parse far more formats than that if `app.ingestion.allowed-content-types` allowed them
+through. The trade-off: Tika returns one `Document` per file with no per-page split, so **citations
+no longer carry a page number** for any file type — `pageNumber` in every citation is `null`. A
+scanned, image-only PDF (or any file with no extractable text) yields no text and is marked
+`FAILED` with an OCR hint rather than silently "completing" as a document that answers nothing.
 
 ## Testing
 
@@ -243,10 +247,9 @@ no extractable text) yields no text and is marked `FAILED` with an OCR hint rath
 ./mvnw test
 ```
 
-48 tests: unit tests for the citation-mapping, upload, and auth logic, `@WebMvcTest` slices for
-every controller, and Testcontainers integration tests running against real Postgres/pgvector and
-real MinIO with the AI models stubbed — so the whole suite runs **without an API key and at no
-cost**.
+47 tests: unit tests for the citation-mapping, upload, and auth logic, `@WebMvcTest` slices for
+every controller, and Testcontainers integration tests running against a real Qdrant with the AI
+models stubbed — so the whole suite runs **without an API key and at no cost**.
 
 Four further tests exercise real OpenAI calls and are skipped unless `OPENAI_API_KEY` is set:
 
@@ -268,7 +271,7 @@ Tunables live under `app.*` in `application.yaml`:
 | `app.qa.top-k` | 6 | Chunks retrieved per question |
 | `app.qa.similarity-threshold` | 0.45 | Below this, the question is refused outright |
 | `app.qa.max-snippet-chars` | 320 | Citation snippet length |
-| `app.storage.*` | MinIO | Endpoint, bucket, credentials, path-style access |
+| `spring.ai.vectorstore.qdrant.*` | `localhost:6334`, collection `vector_store` | Host, gRPC port, TLS, collection name, schema init |
 | `app.jwt.secret` | dev-only fallback | Base64 HMAC-SHA256 key, ≥256 bits. **Set `JWT_SECRET` for anything beyond local dev.** |
 | `app.jwt.access-token-expiry-ms` | 900000 (15 min) | `access_token` cookie lifetime |
 | `app.jwt.refresh-token-expiry-ms` | 604800000 (7 days) | `refresh_token` cookie lifetime |
@@ -277,15 +280,17 @@ Tunables live under `app.*` in `application.yaml`:
 Raising `similarity-threshold` makes the system refuse more and hallucinate less; lowering it does
 the reverse.
 
-### Deploying against real AWS S3
-
-Point `app.storage.endpoint` at S3, set `app.storage.path-style-access: false`, and supply real
-credentials. No code changes — the storage adapter is the same.
-
 ## Notable constraints
 
-- Embedding dimension is pinned to **1536** (`text-embedding-3-small`) in the Flyway schema.
-  Changing the embedding model requires a migration and a full re-embed of every document.
+- Embedding dimension is pinned to **1536** (`text-embedding-3-small`) in the Qdrant collection,
+  created at startup from `spring.ai.vectorstore.qdrant.*` rather than a Flyway migration. Changing
+  the embedding model still means a new collection (or a wipe) and a full re-embed of every
+  document.
+- **No database-level uniqueness.** Qdrant has no unique constraints, so a duplicate email or a
+  duplicate (owner, checksum) upload is rejected by a plain check-then-write in application code,
+  not a database constraint. Two genuinely concurrent requests for the same email or the same
+  content can both pass the check before either writes — an accepted trade-off of using Qdrant as
+  the only datastore, not a bug.
 - Each question is answered independently; there is no conversation history and no stored Q&A log.
 - Refresh tokens are stateless — there is no server-side revocation, so a leaked refresh token
   works until it naturally expires.

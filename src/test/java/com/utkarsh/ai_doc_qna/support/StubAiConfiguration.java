@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Replaces the OpenAI chat and embedding models with deterministic stand-ins, so the integration
- * test exercises the full pipeline — object storage, parsing, splitting, pgvector, citation
+ * test exercises the full pipeline — object storage, parsing, splitting, Qdrant, citation
  * mapping — without an API key, network access or cost.
  */
 @TestConfiguration(proxyBeanMethods = false)

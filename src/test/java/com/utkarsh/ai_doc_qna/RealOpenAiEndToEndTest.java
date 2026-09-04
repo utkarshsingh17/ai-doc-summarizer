@@ -15,9 +15,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Duration;
@@ -30,9 +28,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The real thing: real OpenAI embeddings and a real chat completion, against containerised
- * Postgres and MinIO. Skipped unless {@code OPENAI_API_KEY} is set, because it costs money and
- * needs network access — {@link DocumentQaIntegrationTest} covers the same pipeline for free.
+ * The real thing: real OpenAI embeddings and a real chat completion, against a containerised
+ * Qdrant. Skipped unless {@code OPENAI_API_KEY} is set, because it costs money and needs network
+ * access — {@link DocumentQaIntegrationTest} covers the same pipeline for free.
  *
  * <p>What it proves that the stubbed test cannot: that retrieval actually discriminates between
  * relevant and irrelevant content, and that the model genuinely refuses questions the corpus does
@@ -41,7 +39,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import(TestcontainersConfiguration.class)
-@TestPropertySource(properties = "app.storage.bucket=real-e2e-test")
 @EnabledIfEnvironmentVariable(named = "OPENAI_API_KEY", matches = "sk-.+")
 class RealOpenAiEndToEndTest {
 
@@ -72,15 +69,11 @@ class RealOpenAiEndToEndTest {
     @Autowired
     private QaService qaService;
 
-    @Autowired
-    private JdbcTemplate jdbcTemplate;
-
     private AuthTestSupport.Registered user;
 
     @BeforeEach
     void ingestPolicy() throws Exception {
         repository.deleteAll();
-        jdbcTemplate.update("DELETE FROM vector_store");
         user = AuthTestSupport.register(mockMvc, userRepository);
 
         String body = mockMvc.perform(multipart("/api/v1/documents")

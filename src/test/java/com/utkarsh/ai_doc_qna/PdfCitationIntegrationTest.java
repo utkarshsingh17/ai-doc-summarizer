@@ -20,7 +20,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -43,10 +42,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import({TestcontainersConfiguration.class, StubAiConfiguration.class})
-@TestPropertySource(properties = {
-        "spring.ai.openai.api-key=not-used-by-the-stub",
-        "app.storage.bucket=pdf-test"
-})
+@TestPropertySource(properties = "spring.ai.openai.api-key=not-used-by-the-stub")
 class PdfCitationIntegrationTest {
 
     private static final List<String> PAGES = List.of(
@@ -67,17 +63,17 @@ class PdfCitationIntegrationTest {
     private QaService qaService;
 
     @Autowired
-    private JdbcTemplate jdbcTemplate;
-
-    @Autowired
     private StubAiConfiguration.StubChatResponses chatResponses;
 
     private AuthTestSupport.Registered user;
 
+    /**
+     * No vector-store wipe needed: every test uploads under a fresh random document id, so
+     * nothing from an earlier test can be retrieved by this one.
+     */
     @BeforeEach
     void resetCorpus() throws Exception {
         repository.deleteAll();
-        jdbcTemplate.update("DELETE FROM vector_store");
         user = AuthTestSupport.register(mockMvc, userRepository);
     }
 

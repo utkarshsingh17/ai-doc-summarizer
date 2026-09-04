@@ -1,17 +1,5 @@
 package com.utkarsh.ai_doc_qna.document;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
-import jakarta.persistence.Version;
-import org.hibernate.annotations.CreationTimestamp;
-import org.hibernate.annotations.UpdateTimestamp;
-
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
@@ -22,95 +10,88 @@ import java.util.UUID;
  * <p>Named {@code SourceDocument} rather than {@code Document} because
  * {@code org.springframework.ai.document.Document} — the chunk type — appears alongside it
  * throughout the ingestion and retrieval code.
+ *
+ * <p>Unlike {@link com.utkarsh.ai_doc_qna.auth.User}, this is mutable: ingestion moves a document
+ * through {@code PENDING} → {@code PROCESSING} → {@code COMPLETED}/{@code FAILED} over its
+ * lifetime, and each transition is persisted back via
+ * {@link QdrantSourceDocumentRepository#updateStatus}.
  */
-@Entity
-@Table(name = "source_documents")
 public class SourceDocument {
 
-    /** Truncated so a pathological stack trace cannot outgrow the column or the response. */
+    /** Truncated so a pathological stack trace cannot outgrow the payload or the response. */
     private static final int MAX_ERROR_LENGTH = 2000;
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
-    @Column(nullable = false, updatable = false)
-    private UUID id;
-
-    @Version
-    private Long version;
-
-    @Column(nullable = false, length = 512)
-    private String filename;
-
-    @Column(name = "content_type", nullable = false, length = 128)
-    private String contentType;
-
-    @Column(name = "size_bytes", nullable = false)
-    private long sizeBytes;
-
-    @Column(nullable = false, length = 64, updatable = false)
-    private String checksum;
-
-    @Column(name = "storage_key", nullable = false, length = 1024)
-    private String storageKey;
-
-    /**
-     * Nullable in the schema only because rows created before ownership existed have none —
-     * {@link #create} always requires it for anything uploaded from here on.
-     */
-    @Column(name = "owner_id")
-    private UUID ownerId;
-
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 32)
+    private final UUID id;
+    private final String filename;
+    private final String contentType;
+    private final long sizeBytes;
+    private final String checksum;
+    private final UUID ownerId;
     private IngestionStatus status;
-
-    @Column(name = "chunk_count", nullable = false)
     private int chunkCount;
-
-    @Column(name = "error_message")
     private String errorMessage;
-
-    @CreationTimestamp
-    @Column(name = "created_at", nullable = false, updatable = false)
-    private Instant createdAt;
-
-    @UpdateTimestamp
-    @Column(name = "updated_at", nullable = false)
+    private final Instant createdAt;
     private Instant updatedAt;
 
-    /** Required by Hibernate; use {@link #create} to build a new document. */
-    protected SourceDocument() {
+    private SourceDocument(UUID id, String filename, String contentType, long sizeBytes, String checksum,
+                           UUID ownerId, IngestionStatus status, int chunkCount, String errorMessage,
+                           Instant createdAt, Instant updatedAt) {
+        this.id = id;
+        this.filename = filename;
+        this.contentType = contentType;
+        this.sizeBytes = sizeBytes;
+        this.checksum = checksum;
+        this.ownerId = ownerId;
+        this.status = status;
+        this.chunkCount = chunkCount;
+        this.errorMessage = errorMessage;
+        this.createdAt = createdAt;
+        this.updatedAt = updatedAt;
     }
 
     public static SourceDocument create(String filename, String contentType, long sizeBytes,
-                                        String checksum, String storageKey, UUID ownerId) {
-        SourceDocument document = new SourceDocument();
-        document.filename = Objects.requireNonNull(filename, "filename");
-        document.contentType = Objects.requireNonNull(contentType, "contentType");
-        document.sizeBytes = sizeBytes;
-        document.checksum = Objects.requireNonNull(checksum, "checksum");
-        document.storageKey = Objects.requireNonNull(storageKey, "storageKey");
-        document.ownerId = Objects.requireNonNull(ownerId, "ownerId");
-        document.status = IngestionStatus.PENDING;
-        document.chunkCount = 0;
-        return document;
+                                        String checksum, UUID ownerId) {
+        Instant now = Instant.now();
+        return new SourceDocument(
+                UUID.randomUUID(),
+                Objects.requireNonNull(filename, "filename"),
+                Objects.requireNonNull(contentType, "contentType"),
+                sizeBytes,
+                Objects.requireNonNull(checksum, "checksum"),
+                Objects.requireNonNull(ownerId, "ownerId"),
+                IngestionStatus.PENDING,
+                0,
+                null,
+                now,
+                now);
+    }
+
+    /** Reconstructs a document read back from the store; does not create a new one. */
+    static SourceDocument restore(UUID id, String filename, String contentType, long sizeBytes, String checksum,
+                                  UUID ownerId, IngestionStatus status, int chunkCount, String errorMessage,
+                                  Instant createdAt, Instant updatedAt) {
+        return new SourceDocument(id, filename, contentType, sizeBytes, checksum, ownerId, status, chunkCount,
+                errorMessage, createdAt, updatedAt);
     }
 
     public void markProcessing() {
         this.status = IngestionStatus.PROCESSING;
         this.errorMessage = null;
+        this.updatedAt = Instant.now();
     }
 
     public void markCompleted(int chunkCount) {
         this.status = IngestionStatus.COMPLETED;
         this.chunkCount = chunkCount;
         this.errorMessage = null;
+        this.updatedAt = Instant.now();
     }
 
     public void markFailed(String reason) {
         this.status = IngestionStatus.FAILED;
         this.chunkCount = 0;
         this.errorMessage = truncate(reason);
+        this.updatedAt = Instant.now();
     }
 
     public boolean isAnswerable() {
@@ -119,10 +100,6 @@ public class SourceDocument {
 
     public UUID getId() {
         return id;
-    }
-
-    public Long getVersion() {
-        return version;
     }
 
     public String getFilename() {
@@ -139,10 +116,6 @@ public class SourceDocument {
 
     public String getChecksum() {
         return checksum;
-    }
-
-    public String getStorageKey() {
-        return storageKey;
     }
 
     public UUID getOwnerId() {

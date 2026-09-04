@@ -4,7 +4,6 @@ import com.utkarsh.ai_doc_qna.common.exception.DocumentNotFoundException;
 import com.utkarsh.ai_doc_qna.common.exception.DuplicateDocumentException;
 import com.utkarsh.ai_doc_qna.common.exception.UnsupportedFileTypeException;
 import com.utkarsh.ai_doc_qna.config.AppProperties;
-import com.utkarsh.ai_doc_qna.storage.DocumentStorage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -22,11 +21,9 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -36,9 +33,6 @@ class DocumentServiceTest {
 
     @Mock
     private SourceDocumentRepository repository;
-
-    @Mock
-    private DocumentStorage storage;
 
     @Mock
     private VectorStore vectorStore;
@@ -51,20 +45,18 @@ class DocumentServiceTest {
     @BeforeEach
     void setUp() {
         AppProperties properties = new AppProperties(
-                new AppProperties.Storage("http://localhost:9000", "us-east-1", "test-bucket",
-                        "key", "secret", true),
                 new AppProperties.Ingestion(800, 350, 1024 * 1024,
                         Set.of("application/pdf", "text/plain", "text/markdown")),
                 new AppProperties.Qa(6, 0.45, 320),
                 new AppProperties.Jwt("c2VjcmV0LWZvci10ZXN0cy1vbmx5LWF0LWxlYXN0LTMyLWJ5dGVzIQ==", 900000, 604800000, false),
                 null);
-        documentService = new DocumentService(repository, storage, vectorStore, eventPublisher, properties);
+        documentService = new DocumentService(repository, vectorStore, eventPublisher, properties);
     }
 
     @Test
     void upload_withNewFile_shouldStoreItAndPublishAnIngestionEvent() {
         when(repository.findByOwnerIdAndChecksum(any(), anyString())).thenReturn(Optional.empty());
-        when(repository.save(any(SourceDocument.class))).thenAnswer(call -> call.getArgument(0));
+        when(repository.save(any(SourceDocument.class), any())).thenAnswer(call -> call.getArgument(0));
 
         SourceDocument saved = documentService.upload(textFile("policy.txt", "remote work policy"), OWNER_ID);
 
@@ -73,33 +65,31 @@ class DocumentServiceTest {
         assertThat(saved.getStatus()).isEqualTo(IngestionStatus.PENDING);
         assertThat(saved.getChunkCount()).isZero();
         assertThat(saved.getOwnerId()).isEqualTo(OWNER_ID);
-        verify(storage).store(anyString(), any(), anyLong(), anyString());
         verify(eventPublisher).publishEvent(any(DocumentUploadedEvent.class));
     }
 
     @Test
-    void upload_shouldNamespaceTheStorageKeySoIdenticalFilenamesDoNotCollide() {
+    void upload_shouldPassTheUploadedBytesThroughToTheRepository() {
         when(repository.findByOwnerIdAndChecksum(any(), anyString())).thenReturn(Optional.empty());
-        when(repository.save(any(SourceDocument.class))).thenAnswer(call -> call.getArgument(0));
+        when(repository.save(any(SourceDocument.class), any())).thenAnswer(call -> call.getArgument(0));
 
         documentService.upload(textFile("policy.txt", "contents"), OWNER_ID);
 
-        ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
-        verify(storage).store(key.capture(), any(), anyLong(), anyString());
-        assertThat(key.getValue()).startsWith("documents/").endsWith("/policy.txt");
+        ArgumentCaptor<byte[]> content = ArgumentCaptor.forClass(byte[].class);
+        verify(repository).save(any(SourceDocument.class), content.capture());
+        assertThat(content.getValue()).isEqualTo("contents".getBytes());
     }
 
     @Test
-    void upload_whenChecksumAlreadyExistsForTheSameOwner_shouldRejectBeforeTouchingStorage() {
-        SourceDocument existing = SourceDocument.create("policy.txt", "text/plain", 10, "abc", "key", OWNER_ID);
+    void upload_whenChecksumAlreadyExistsForTheSameOwner_shouldRejectBeforeSaving() {
+        SourceDocument existing = SourceDocument.create("policy.txt", "text/plain", 10, "abc", OWNER_ID);
         when(repository.findByOwnerIdAndChecksum(any(), anyString())).thenReturn(Optional.of(existing));
 
         assertThatThrownBy(() -> documentService.upload(textFile("policy.txt", "remote work policy"), OWNER_ID))
                 .isInstanceOf(DuplicateDocumentException.class);
 
         // Re-ingesting a duplicate would double its chunks and skew retrieval.
-        verifyNoInteractions(storage);
-        verify(repository, never()).save(any());
+        verify(repository, never()).save(any(), any());
     }
 
     @Test
@@ -111,13 +101,12 @@ class DocumentServiceTest {
 
         assertThatThrownBy(() -> documentService.upload(file, OWNER_ID))
                 .isInstanceOf(UnsupportedFileTypeException.class);
-        verifyNoInteractions(storage);
     }
 
     @Test
     void upload_whenBrowserSendsOctetStreamForMarkdown_shouldResolveTypeFromTheExtension() {
         when(repository.findByOwnerIdAndChecksum(any(), anyString())).thenReturn(Optional.empty());
-        when(repository.save(any(SourceDocument.class))).thenAnswer(call -> call.getArgument(0));
+        when(repository.save(any(SourceDocument.class), any())).thenAnswer(call -> call.getArgument(0));
 
         MockMultipartFile file = new MockMultipartFile(
                 "file", "notes.md", "application/octet-stream", "# Notes".getBytes());
@@ -140,13 +129,12 @@ class DocumentServiceTest {
 
         assertThatThrownBy(() -> documentService.upload(file, OWNER_ID))
                 .isInstanceOf(IllegalArgumentException.class);
-        verifyNoInteractions(storage);
     }
 
     @Test
     void upload_shouldStripPathTraversalFromTheFilename() {
         when(repository.findByOwnerIdAndChecksum(any(), anyString())).thenReturn(Optional.empty());
-        when(repository.save(any(SourceDocument.class))).thenAnswer(call -> call.getArgument(0));
+        when(repository.save(any(SourceDocument.class), any())).thenAnswer(call -> call.getArgument(0));
 
         MockMultipartFile file = new MockMultipartFile(
                 "file", "../../etc/passwd.txt", "text/plain", "content".getBytes());
@@ -155,9 +143,8 @@ class DocumentServiceTest {
     }
 
     @Test
-    void delete_shouldRemoveChunksObjectAndRow() {
-        SourceDocument document = SourceDocument.create(
-                "policy.txt", "text/plain", 10, "abc", "documents/x/policy.txt", OWNER_ID);
+    void delete_shouldRemoveChunksAndTheDocumentPoint() {
+        SourceDocument document = SourceDocument.create("policy.txt", "text/plain", 10, "abc", OWNER_ID);
         UUID id = UUID.randomUUID();
         when(repository.findByIdAndOwnerId(id, OWNER_ID)).thenReturn(Optional.of(document));
 
@@ -166,7 +153,6 @@ class DocumentServiceTest {
         ArgumentCaptor<String> filter = ArgumentCaptor.forClass(String.class);
         verify(vectorStore).delete(filter.capture());
         assertThat(filter.getValue()).startsWith("document_id == '");
-        verify(storage).delete("documents/x/policy.txt");
         verify(repository).delete(document);
     }
 

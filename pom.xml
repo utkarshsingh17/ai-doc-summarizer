@@ -29,7 +29,6 @@
 	<properties>
 		<java.version>25</java.version>
 		<spring-ai.version>2.0.0</spring-ai.version>
-		<aws-sdk.version>2.35.9</aws-sdk.version>
 		<testcontainers.version>1.21.3</testcontainers.version>
 	</properties>
 
@@ -50,25 +49,16 @@
 				<type>pom</type>
 				<scope>import</scope>
 			</dependency>
-			<dependency>
-				<groupId>software.amazon.awssdk</groupId>
-				<artifactId>bom</artifactId>
-				<version>${aws-sdk.version}</version>
-				<type>pom</type>
-				<scope>import</scope>
-			</dependency>
 		</dependencies>
 	</dependencyManagement>
 
 	<dependencies>
-		<!-- Web / persistence. Boot 4 renamed the web starter to -webmvc. -->
+		<!-- Web layer. Boot 4 renamed the web starter to -webmvc. There is no JPA/relational
+		     starter here: users and document metadata live in Qdrant alongside the chunk
+		     embeddings, not in a relational database. -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-webmvc</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-data-jpa</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -77,6 +67,14 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-security</artifactId>
+		</dependency>
+		<!-- Page/Pageable/Sort for document listing, normally transitive via a spring-data-*
+		     starter. There is no such starter here (Qdrant is not a Spring Data module), so it is
+		     declared directly; SpringDataWebAutoConfiguration still picks up @PageableDefault from
+		     just this plus spring-boot-starter-webmvc. -->
+		<dependency>
+			<groupId>org.springframework.data</groupId>
+			<artifactId>spring-data-commons</artifactId>
 		</dependency>
 
 		<!-- JWT issuing/parsing. Version pinned: not managed by the Boot 4.1 parent BOM. -->
@@ -98,30 +96,14 @@
 			<scope>runtime</scope>
 		</dependency>
 
-		<!-- Flyway is no longer transitive via the JPA starter in Boot 4, and the
-		     database-specific module is mandatory or startup fails. -->
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-flyway</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>org.flywaydb</groupId>
-			<artifactId>flyway-database-postgresql</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>org.postgresql</groupId>
-			<artifactId>postgresql</artifactId>
-			<scope>runtime</scope>
-		</dependency>
-
-		<!-- Spring AI: chat + embeddings, pgvector store, PDF parsing -->
+		<!-- Spring AI: chat + embeddings, Qdrant store, PDF parsing -->
 		<dependency>
 			<groupId>org.springframework.ai</groupId>
 			<artifactId>spring-ai-starter-model-openai</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.springframework.ai</groupId>
-			<artifactId>spring-ai-starter-vector-store-pgvector</artifactId>
+			<artifactId>spring-ai-starter-vector-store-qdrant</artifactId>
 		</dependency>
 		<!-- Tika auto-detects format and handles pdf/txt/md plus anything else Tika supports
 		     (docx, pptx, html, rtf, odt, ...) through one reader. Trade-off: unlike
@@ -145,12 +127,6 @@
 			<version>3.0.7</version>
 		</dependency>
 
-		<!-- Object storage. AWS SDK v2 talks to MinIO and real S3 alike. -->
-		<dependency>
-			<groupId>software.amazon.awssdk</groupId>
-			<artifactId>s3</artifactId>
-		</dependency>
-
 		<!-- No Lombok, on JDK 25 or 26: 1.18.46 (the newest release) generates nothing at all
 		     for any class it touches — no error, just missing symbols — the instant javac sees a
 		     version-targeting flag: the "release" flag, or even plain source/target flags set to
@@ -161,9 +137,9 @@
 		     build. Re-check both empirically (not from the changelog) before reintroducing, using
 		     the exact flags Maven passes. -->
 
-		<!-- Auto-starts/stops compose.yaml (postgres + minio) around the app lifecycle
-		     for local runs, so `spring-boot:run` no longer needs a manual `docker compose up`
-		     first. Optional so it never ships in a deployed artifact. -->
+		<!-- Auto-starts/stops compose.yaml (qdrant) around the app lifecycle for local runs,
+		     so `spring-boot:run` no longer needs a manual `docker compose up` first. Optional
+		     so it never ships in a deployed artifact. -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-docker-compose</artifactId>
@@ -193,12 +169,14 @@
 		</dependency>
 		<dependency>
 			<groupId>org.testcontainers</groupId>
-			<artifactId>postgresql</artifactId>
+			<artifactId>qdrant</artifactId>
 			<scope>test</scope>
 		</dependency>
+		<!-- Supplies the @ServiceConnection support for QdrantContainer (QdrantConnectionDetails),
+		     the same way spring-boot-testcontainers does natively for PostgreSQLContainer. -->
 		<dependency>
-			<groupId>org.testcontainers</groupId>
-			<artifactId>minio</artifactId>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-spring-boot-testcontainers</artifactId>
 			<scope>test</scope>
 		</dependency>
 		<dependency>
