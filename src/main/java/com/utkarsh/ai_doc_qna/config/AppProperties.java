@@ -19,21 +19,10 @@ import java.util.Set;
 @Validated
 @ConfigurationProperties(prefix = "app")
 public record AppProperties(
-        @Valid Storage storage,
         @Valid Ingestion ingestion,
         @Valid Qa qa,
         @Valid Jwt jwt,
         @Valid Cors cors) {
-
-    public record Storage(
-            @NotBlank String endpoint,
-            @NotBlank String region,
-            @NotBlank String bucket,
-            @NotBlank String accessKey,
-            @NotBlank String secretKey,
-            /* MinIO addresses buckets by path; real AWS S3 uses virtual-host style. */
-            boolean pathStyleAccess) {
-    }
 
     public record Ingestion(
             @Min(100) int chunkSizeTokens,

@@ -34,7 +34,7 @@ public final class AuthTestSupport {
                 .andExpect(status().isCreated())
                 .andReturn().getResponse();
         Cookie accessCookie = response.getCookie("access_token");
-        UUID userId = userRepository.findByEmail(email).orElseThrow().getId();
+        UUID userId = userRepository.findByEmail(email).orElseThrow().id();
         return new Registered(accessCookie, userId);
     }
 }

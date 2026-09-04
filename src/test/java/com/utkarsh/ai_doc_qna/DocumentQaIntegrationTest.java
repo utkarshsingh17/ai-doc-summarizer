@@ -12,11 +12,12 @@ import com.utkarsh.ai_doc_qna.support.StubAiConfiguration;
 import com.utkarsh.ai_doc_qna.support.TestcontainersConfiguration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.vectorstore.SearchRequest;
+import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -33,17 +34,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Full pipeline against real Postgres/pgvector and real MinIO, with the AI models stubbed.
- * Runs without an API key and costs nothing.
+ * Full pipeline against a real Qdrant, with the AI models stubbed. Runs without an API key and
+ * costs nothing.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import({TestcontainersConfiguration.class, StubAiConfiguration.class})
-@TestPropertySource(properties = {
-        // The stub models replace these beans, but OpenAI autoconfiguration still wants a key.
-        "spring.ai.openai.api-key=not-used-by-the-stub",
-        "app.storage.bucket=integration-test"
-})
+// The stub models replace these beans, but OpenAI autoconfiguration still wants a key.
+@TestPropertySource(properties = "spring.ai.openai.api-key=not-used-by-the-stub")
 class DocumentQaIntegrationTest {
 
     private static final String POLICY = """
@@ -70,17 +68,22 @@ class DocumentQaIntegrationTest {
     private QaService qaService;
 
     @Autowired
-    private JdbcTemplate jdbcTemplate;
+    private VectorStore vectorStore;
 
     @Autowired
     private StubAiConfiguration.StubChatResponses chatResponses;
 
     private AuthTestSupport.Registered user;
 
+    /**
+     * No vector-store wipe here: every test uploads its own document under a fresh random
+     * document id and a fresh registered user, so nothing from an earlier test can be retrieved
+     * by, or counted against, this one — the same isolation the app itself relies on in
+     * production. Only the relational data needs a manual reset.
+     */
     @BeforeEach
     void resetCorpus() throws Exception {
         repository.deleteAll();
-        jdbcTemplate.update("DELETE FROM vector_store");
         user = AuthTestSupport.register(mockMvc, userRepository);
     }
 
@@ -92,7 +95,7 @@ class DocumentQaIntegrationTest {
         SourceDocument ingested = repository.findById(documentId).orElseThrow();
         assertThat(ingested.getChunkCount()).isPositive();
         assertThat(ingested.isAnswerable()).isTrue();
-        assertThat(countChunks()).isEqualTo(ingested.getChunkCount());
+        assertThat(countChunks(documentId)).isEqualTo(ingested.getChunkCount());
 
         chatResponses.reply("Up to three days per week.", true, "1");
         AnswerResponse answer = qaService.ask("How many remote days are allowed?", user.userId());
@@ -127,14 +130,14 @@ class DocumentQaIntegrationTest {
     void deletingADocumentRemovesItsChunksFromTheVectorStore() throws Exception {
         UUID documentId = uploadPolicy();
         awaitCompletion(documentId);
-        assertThat(countChunks()).isPositive();
+        assertThat(countChunks(documentId)).isPositive();
 
         mockMvc.perform(delete("/api/v1/documents/{id}", documentId).cookie(user.accessCookie()))
                 .andExpect(status().isNoContent());
 
         assertThat(repository.findById(documentId)).isEmpty();
         // Chunks must go with the document, or citations would point at a document that is gone.
-        assertThat(countChunks()).isZero();
+        assertThat(countChunks(documentId)).isZero();
     }
 
     /**
@@ -188,9 +191,15 @@ class DocumentQaIntegrationTest {
                         .isEqualTo(IngestionStatus.COMPLETED));
     }
 
-    private int countChunks() {
-        Integer count = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM vector_store", Integer.class);
-        return count == null ? 0 : count;
+    /** Mirrors {@code RetrievalService.retrieveForDocument}'s filter, scoped to one document. */
+    private int countChunks(UUID documentId) {
+        return vectorStore.similaritySearch(SearchRequest.builder()
+                        .query("count")
+                        .topK(1000)
+                        .similarityThreshold(0)
+                        .filterExpression("document_id == '%s'".formatted(documentId))
+                        .build())
+                .size();
     }
 
     private static MockMultipartFile policyFile() {

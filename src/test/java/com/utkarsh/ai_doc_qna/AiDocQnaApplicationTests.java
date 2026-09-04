@@ -8,15 +8,13 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.context.TestPropertySource;
 
 /**
- * Context smoke test. Needs the containers and the stub models: the real context requires a
- * database with pgvector, an object store, and an OpenAI key.
+ * Context smoke test. Needs the container and the stub models: the real context requires a
+ * Qdrant instance (users, document metadata and chunk embeddings all live there) and an OpenAI
+ * key.
  */
 @SpringBootTest
 @Import({TestcontainersConfiguration.class, StubAiConfiguration.class})
-@TestPropertySource(properties = {
-		"spring.ai.openai.api-key=not-used-by-the-stub",
-		"app.storage.bucket=context-test"
-})
+@TestPropertySource(properties = "spring.ai.openai.api-key=not-used-by-the-stub")
 class AiDocQnaApplicationTests {
 
 	@Test
