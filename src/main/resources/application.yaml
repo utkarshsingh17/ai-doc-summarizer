@@ -2,6 +2,27 @@ spring:
   application:
     name: ai-doc-qna
 
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5434}/${DB_NAME:ai_doc_qna}
+    username: ${DB_USER:ai_doc_qna}
+    password: ${DB_PASSWORD:ai_doc_qna}
+
+  jpa:
+    hibernate:
+      # Flyway owns the schema. `validate` fails fast when an entity and a migration disagree.
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    validate-on-migrate: true
+    out-of-order: false
+
   servlet:
     multipart:
       max-file-size: 50MB
@@ -38,8 +59,8 @@ spring:
         api-key: ${QDRANT_API_KEY:}
         collection-name: vector_store
         # The store creates its own collection (dimension 1536, cosine distance) on startup.
-        # Users and document metadata live in Qdrant too (see QdrantCollectionsInitializer),
-        # but that's plain application code, not something this flag reaches.
+        # Document metadata lives in Qdrant too (see QdrantCollectionsInitializer), but that's
+        # plain application code, not something this flag reaches. Users live in Postgres.
         initialize-schema: true
 
 app:

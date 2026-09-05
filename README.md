@@ -4,8 +4,9 @@ Upload PDFs, policies, manuals or notes, then ask questions that are answered **
 you uploaded — with citations back to the exact source section. Every account only ever sees,
 uploads to, or asks questions about its own documents.
 
-Built on Spring Boot 4.1 and Spring AI 2.0. Qdrant is the only datastore — accounts, document
-metadata, the originally uploaded files, and chunk embeddings all live there.
+Built on Spring Boot 4.1 and Spring AI 2.0. Accounts live in Postgres; document metadata, chunk
+embeddings, and (only until a document finishes processing) its originally uploaded bytes all live
+in Qdrant.
 
 ## How it answers with citations
 
@@ -31,7 +32,7 @@ impossible. Instead:
   ```bash
   export JAVA_HOME=/opt/homebrew/opt/openjdk@25/libexec/openjdk.jdk/Contents/Home
   ```
-- **Docker** — for Qdrant and the Testcontainers-backed tests.
+- **Docker** — for Postgres, Qdrant, and the Testcontainers-backed tests.
 - **An OpenAI API key** — only to run the app. The test suite does not need one.
 
 ## Running it
@@ -42,11 +43,12 @@ export OPENAI_API_KEY=sk-...
 ./mvnw spring-boot:run
 ```
 
-Qdrant starts automatically — `spring-boot-docker-compose` brings `compose.yaml` up before the app
-context refreshes and tears it down on shutdown. (`docker compose up -d` still works if you want it
-running independently of the app.) The app creates its three collections on startup: `vector_store`
-(chunk embeddings, via Spring AI's `initialize-schema: true`) and `users`/`documents` (accounts and
-document metadata + raw file bytes, via `QdrantCollectionsInitializer`). Qdrant's dashboard is at
+Postgres and Qdrant both start automatically — `spring-boot-docker-compose` brings `compose.yaml`
+up before the app context refreshes and tears it down on shutdown. (`docker compose up -d` still
+works if you want them running independently of the app.) Flyway creates the `users` table on
+startup; Qdrant creates its own collections the same way — `vector_store` (chunk embeddings, via
+Spring AI's `initialize-schema: true`) and `documents` (metadata + the raw uploaded bytes until a
+document finishes processing, via `QdrantCollectionsInitializer`). Qdrant's dashboard is at
 `http://localhost:6333/dashboard` if you want to poke at collections directly.
 
 ## API
@@ -244,12 +246,16 @@ POST /documents → validate → SHA-256 (dedupe per account) → upsert point (
 
 Metadata and the raw uploaded bytes are written together as one Qdrant point, so there is no
 separate object store to keep in sync and no "row exists but the file didn't get written" failure
-mode. Parsing goes through Apache Tika (`TikaDocumentReader`), which handles PDF/TXT/MD uniformly
-and could parse far more formats than that if `app.ingestion.allowed-content-types` allowed them
-through. The trade-off: Tika returns one `Document` per file with no per-page split, so **citations
-no longer carry a page number** for any file type — `pageNumber` in every citation is `null`. A
-scanned, image-only PDF (or any file with no extractable text) yields no text and is marked
-`FAILED` with an OCR hint rather than silently "completing" as a document that answers nothing.
+mode. Once ingestion reaches `COMPLETED`, that same point's `content` field is deleted — the chunks
+in `vector_store` are all any future question needs, so there's no reason to go on storing (and
+paying to store) the original file. Parsing goes through Apache Tika (`TikaDocumentReader`), which
+handles PDF/TXT/MD uniformly and could parse far more formats than that if
+`app.ingestion.allowed-content-types` allowed them through. The trade-off: Tika returns one
+`Document` per file with no per-page split, so **citations no longer carry a page number** for any
+file type — `pageNumber` in every citation is `null`. A scanned, image-only PDF (or any file with
+no extractable text) yields no text and is marked `FAILED` with an OCR hint rather than silently
+"completing" as a document that answers nothing (and its bytes are left in place, since there's no
+retry flow that would need them cleaned up).
 
 ## Testing
 
@@ -257,9 +263,9 @@ scanned, image-only PDF (or any file with no extractable text) yields no text an
 ./mvnw test
 ```
 
-47 tests: unit tests for the citation-mapping, upload, and auth logic, `@WebMvcTest` slices for
-every controller, and Testcontainers integration tests running against a real Qdrant with the AI
-models stubbed — so the whole suite runs **without an API key and at no cost**.
+52 tests: unit tests for the citation-mapping, upload, and auth logic, `@WebMvcTest` slices for
+every controller, and Testcontainers integration tests running against a real Postgres and a real
+Qdrant with the AI models stubbed — so the whole suite runs **without an API key and at no cost**.
 
 Four further tests exercise real OpenAI calls and are skipped unless `OPENAI_API_KEY` is set:
 
@@ -281,6 +287,7 @@ Tunables live under `app.*` in `application.yaml`:
 | `app.qa.top-k` | 6 | Chunks retrieved per question |
 | `app.qa.similarity-threshold` | 0.45 | Below this, the question is refused outright |
 | `app.qa.max-snippet-chars` | 320 | Citation snippet length |
+| `spring.datasource.*` | `localhost:5434`, db/user/password `ai_doc_qna` | Postgres connection, via `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`/`DB_PASSWORD` |
 | `spring.ai.vectorstore.qdrant.*` | `localhost:6334`, collection `vector_store` | Host, gRPC port, TLS, collection name, schema init |
 | `app.jwt.secret` | dev-only fallback | Base64 HMAC-SHA256 key, ≥256 bits. **Set `JWT_SECRET` for anything beyond local dev.** |
 | `app.jwt.access-token-expiry-ms` | 900000 (15 min) | `access_token` cookie lifetime |
@@ -292,28 +299,30 @@ the reverse.
 
 ## Deployment
 
-Backend on [Render](https://render.com), frontend on [Vercel](https://vercel.com), Qdrant on
-[Qdrant Cloud](https://cloud.qdrant.io). The frontend proxies `/api/*` to Render through a Vercel
-rewrite (`ai-doc-qna-frontend/vercel.json`) rather than calling it cross-origin — the auth cookies
-are `SameSite=Lax` with no CSRF token, which only works when the browser sees one origin for
-everything. Don't switch the cookies to `SameSite=None` to "fix" a cross-origin failure instead;
-that removes the app's only CSRF defense.
+Backend on [Render](https://render.com) (Postgres included, as a Render-managed database), frontend
+on [Vercel](https://vercel.com), Qdrant on [Qdrant Cloud](https://cloud.qdrant.io). The frontend
+proxies `/api/*` to Render through a Vercel rewrite (`ai-doc-qna-frontend/vercel.json`) rather than
+calling it cross-origin — the auth cookies are `SameSite=Lax` with no CSRF token, which only works
+when the browser sees one origin for everything. Don't switch the cookies to `SameSite=None` to
+"fix" a cross-origin failure instead; that removes the app's only CSRF defense.
 
 1. **Qdrant Cloud**: create a free cluster. You'll get a host like
-   `xyz-abc.us-east.aws.cloud.qdrant.io` (gRPC port 6334, TLS on) and an API key.
-2. **Render**: connect this repo, and it picks up `render.yaml` (a Docker-based web service,
-   health check at `/healthz`). Fill in the dashboard-only env vars it prompts for:
+   `xyz-abc.us-east.aws.cloud.qdrant.io` (gRPC port 6334, TLS on) and an API key. Use just the
+   hostname for `QDRANT_HOST` below — no `https://` prefix, the Qdrant client rejects that with a
+   confusing `URISyntaxException`.
+2. **Render**: connect this repo, and it picks up `render.yaml` — a Docker-based web service
+   (health check at `/healthz`) plus a managed Postgres database, auto-wired together (no manual
+   connection string needed). Fill in the dashboard-only env vars it prompts for:
    `OPENAI_API_KEY`, `JWT_SECRET` (a real random Base64 string, not the dev fallback),
-   `QDRANT_HOST` (from step 1, without the `https://`), `QDRANT_API_KEY`, and
-   `CORS_ALLOWED_ORIGINS` (your Vercel domain — belt-and-suspenders since the proxy means the
-   browser shouldn't call Render directly, but harmless to set). Note the assigned
-   `https://<name>.onrender.com` URL.
+   `QDRANT_HOST` (see above), `QDRANT_API_KEY`, and `CORS_ALLOWED_ORIGINS` (your Vercel domain —
+   belt-and-suspenders since the proxy means the browser shouldn't call Render directly, but
+   harmless to set). Note the assigned `https://<name>.onrender.com` URL.
 3. **Vercel**: import `ai-doc-qna-frontend`. Update `vercel.json`'s rewrite `destination` to the
    actual Render URL from step 2 if it differs from `ai-doc-qna-backend.onrender.com` (Render
    appends a suffix if that name is already taken). Vercel auto-detects the Vite framework preset;
    no build config or `VITE_API_BASE_URL` needed — same-origin is the production default.
 4. Render's free tier spins down after 15 minutes idle; the first request after that cold-starts
-   slowly (JVM boot + reconnecting to Qdrant Cloud).
+   slowly (JVM boot + reconnecting to both Postgres and Qdrant Cloud).
 
 ## Notable constraints
 
@@ -321,11 +330,14 @@ that removes the app's only CSRF defense.
   created at startup from `spring.ai.vectorstore.qdrant.*` rather than a Flyway migration. Changing
   the embedding model still means a new collection (or a wipe) and a full re-embed of every
   document.
-- **No database-level uniqueness.** Qdrant has no unique constraints, so a duplicate email or a
-  duplicate (owner, checksum) upload is rejected by a plain check-then-write in application code,
-  not a database constraint. Two genuinely concurrent requests for the same email or the same
-  content can both pass the check before either writes — an accepted trade-off of using Qdrant as
-  the only datastore, not a bug.
+- **Document dedupe has no database-level uniqueness.** Postgres enforces a unique `email` again,
+  but Qdrant has no unique constraints, so a duplicate (owner, checksum) upload is rejected by a
+  plain check-then-write in application code, not a database constraint. Two genuinely concurrent
+  uploads of the same content by the same account can both pass the check before either writes —
+  an accepted trade-off of keeping documents on Qdrant, not a bug.
+- Uploaded file bytes are only stored **until ingestion completes** — once a document is
+  `COMPLETED`, its chunks are all that's needed, and the original file is deleted from Qdrant to
+  avoid paying to store it twice over.
 - Each question is answered independently; there is no conversation history and no stored Q&A log.
 - Refresh tokens are stateless — there is no server-side revocation, so a leaked refresh token
   works until it naturally expires.

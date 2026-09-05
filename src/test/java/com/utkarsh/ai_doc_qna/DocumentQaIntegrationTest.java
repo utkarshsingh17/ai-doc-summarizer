@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
@@ -97,6 +98,8 @@ class DocumentQaIntegrationTest {
         assertThat(ingested.getChunkCount()).isPositive();
         assertThat(ingested.isAnswerable()).isTrue();
         assertThat(countChunks(documentId)).isEqualTo(ingested.getChunkCount());
+        // The raw file bytes served their purpose once chunks exist; nothing needs them anymore.
+        assertThatThrownBy(() -> repository.loadContent(documentId)).isInstanceOf(IllegalStateException.class);
 
         chatResponses.reply("Up to three days per week.", true, "1");
         AnswerResponse answer = qaService.ask("How many remote days are allowed?", user.userId());

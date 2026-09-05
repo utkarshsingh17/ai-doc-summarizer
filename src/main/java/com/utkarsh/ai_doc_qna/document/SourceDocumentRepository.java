@@ -36,6 +36,13 @@ public interface SourceDocumentRepository {
     /** The raw bytes of the originally uploaded file. */
     byte[] loadContent(UUID id);
 
+    /**
+     * Drops the stored file bytes once they are no longer needed — after the document has been
+     * successfully split, embedded, and stored as chunks, there is nothing left that needs the
+     * original file, and there is no reason to keep paying to store it.
+     */
+    void clearContent(UUID id);
+
     void delete(SourceDocument document);
 
     void deleteAll();

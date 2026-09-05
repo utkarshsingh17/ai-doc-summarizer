@@ -11,7 +11,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
-import org.springframework.stereotype.Repository;
+import org.springframework.stereotype.Component;
 
 import java.util.Base64;
 import java.util.Comparator;
@@ -43,8 +43,14 @@ import static io.qdrant.client.WithVectorsSelectorFactory.enable;
  * <p>{@code content} is excluded from every read here except {@link #loadContent}, so listing or
  * fetching a document's status never pulls its (base64, up to ~67 MB for a 50 MB upload) bytes
  * into memory for no reason.
+ *
+ * <p>{@code @Component}, not {@code @Repository} — now that JPA is back on the classpath (for
+ * {@code users}), Spring's {@code PersistenceExceptionTranslationPostProcessor} intercepts every
+ * {@code @Repository} bean and unconditionally rewraps any {@code IllegalArgumentException}/
+ * {@code IllegalStateException} it throws as {@code InvalidDataAccessApiUsageException} — a JPA
+ * convention this class has nothing to do with, but the interceptor doesn't check that.
  */
-@Repository
+@Component
 public class QdrantSourceDocumentRepository implements SourceDocumentRepository {
 
     /** Public so {@code QdrantCollectionsInitializer} can create it at startup. */
@@ -162,11 +168,20 @@ public class QdrantSourceDocumentRepository implements SourceDocumentRepository 
     public byte[] loadContent(UUID id) {
         List<RetrievedPoint> points = await(client.retrieveAsync(COLLECTION, List.of(id(id)),
                 include(List.of(CONTENT)), enable(false), null));
-        if (points.isEmpty()) {
+        String base64 = points.isEmpty() ? null : getString(points.getFirst().getPayloadMap(), CONTENT);
+        if (base64 == null) {
+            // Either the document doesn't exist, or it does but clearContent already ran —
+            // ingestion only ever calls this once, before that happens.
             throw new IllegalStateException("Document " + id + " has no stored content");
         }
-        String base64 = getString(points.getFirst().getPayloadMap(), CONTENT);
         return Base64.getDecoder().decode(base64);
+    }
+
+    @Override
+    public void clearContent(UUID id) {
+        // A partial delete of just this one payload key, not a point delete — the document's
+        // metadata (filename, status, chunk count, ...) stays exactly as it is.
+        await(client.deletePayloadAsync(COLLECTION, List.of(CONTENT), id(id), true, null, null));
     }
 
     @Override

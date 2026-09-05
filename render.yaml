@@ -1,3 +1,10 @@
+databases:
+  # Users only — document metadata and chunk embeddings stay in Qdrant. No `plan:` set: Render's
+  # free/lowest Postgres tier changes over time, so check the dashboard and adjust if needed.
+  - name: ai-doc-qna-db
+    databaseName: ai_doc_qna
+    user: ai_doc_qna
+
 services:
   - type: web
     name: ai-doc-qna-backend
@@ -6,6 +13,27 @@ services:
     plan: free
     healthCheckPath: /healthz
     envVars:
+      # Wired automatically from the database above — nothing to enter in the dashboard.
+      - key: DB_HOST
+        fromDatabase:
+          name: ai-doc-qna-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: ai-doc-qna-db
+          property: port
+      - key: DB_NAME
+        fromDatabase:
+          name: ai-doc-qna-db
+          property: database
+      - key: DB_USER
+        fromDatabase:
+          name: ai-doc-qna-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: ai-doc-qna-db
+          property: password
       # Secrets and per-environment values — sync: false means Render prompts for these in the
       # dashboard instead of expecting a committed value.
       - key: OPENAI_API_KEY

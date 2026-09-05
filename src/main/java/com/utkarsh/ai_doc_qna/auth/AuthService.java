@@ -9,6 +9,7 @@ import com.utkarsh.ai_doc_qna.common.exception.InvalidTokenException;
 import io.jsonwebtoken.JwtException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AuthService {
@@ -23,6 +24,7 @@ public class AuthService {
         this.jwtService = jwtService;
     }
 
+    @Transactional
     public AuthResponse register(RegisterRequest request) {
         String email = normalize(request.email());
         if (repository.existsByEmail(email)) {
@@ -32,10 +34,11 @@ public class AuthService {
         return issueTokens(UserPrincipal.of(user));
     }
 
+    @Transactional(readOnly = true)
     public AuthResponse login(LoginRequest request) {
         User user = repository.findByEmail(normalize(request.email()))
                 .orElseThrow(InvalidCredentialsException::new);
-        if (!passwordEncoder.matches(request.password(), user.passwordHash())) {
+        if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
             throw new InvalidCredentialsException();
         }
         return issueTokens(UserPrincipal.of(user));
@@ -45,6 +48,7 @@ public class AuthService {
      * Stateless rotation: a new pair is issued, but the presented refresh token is not
      * invalidated server-side. See {@link JwtService} for why.
      */
+    @Transactional(readOnly = true)
     public AuthResponse refresh(String refreshToken) {
         String email;
         try {

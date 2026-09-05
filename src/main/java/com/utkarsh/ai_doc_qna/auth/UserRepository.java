@@ -1,12 +1,13 @@
 package com.utkarsh.ai_doc_qna.auth;
 
-import java.util.Optional;
+import org.springframework.data.jpa.repository.JpaRepository;
 
-public interface UserRepository {
+import java.util.Optional;
+import java.util.UUID;
+
+public interface UserRepository extends JpaRepository<User, UUID> {
 
     Optional<User> findByEmail(String email);
 
     boolean existsByEmail(String email);
-
-    User save(User user);
 }

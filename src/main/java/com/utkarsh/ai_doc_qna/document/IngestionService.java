@@ -79,6 +79,7 @@ public class IngestionService {
             statusWriter.apply(documentId, doc -> doc.markCompleted(chunks.size()));
             log.info("Ingested document {} into {} chunks in {} ms",
                     documentId, chunks.size(), System.currentTimeMillis() - startedAt);
+            clearStoredContent(documentId);
         } catch (Exception | StackOverflowError ex) {
             // StackOverflowError is caught alongside Exception, not left to the async executor's
             // default handler: the tokenizer's regex-based pretokenizer recurses per match, and a
@@ -127,6 +128,19 @@ public class IngestionService {
             return new TikaDocumentReader(resource).get();
         } catch (Exception ex) {
             throw new IllegalStateException("Failed to parse " + document.getFilename(), ex);
+        }
+    }
+
+    /**
+     * The document is already marked {@code COMPLETED} and answerable by the time this runs —
+     * failing to free the now-unneeded file bytes is unfortunate but must never undo that, so
+     * this never lets an exception propagate back into the outer catch block.
+     */
+    private void clearStoredContent(UUID documentId) {
+        try {
+            repository.clearContent(documentId);
+        } catch (Exception ex) {
+            log.warn("Could not clear stored content for document {}", documentId, ex);
         }
     }
 

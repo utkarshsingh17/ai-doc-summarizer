@@ -1,4 +1,22 @@
 services:
+  postgres:
+    image: postgres:17
+    container_name: ai-doc-qna-postgres
+    environment:
+      POSTGRES_DB: ai_doc_qna
+      POSTGRES_USER: ai_doc_qna
+      POSTGRES_PASSWORD: ai_doc_qna
+    ports:
+      # 5433 is taken by an unrelated container on this machine.
+      - "5434:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ai_doc_qna -d ai_doc_qna"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   qdrant:
     image: qdrant/qdrant:v1.18.2
     container_name: ai-doc-qna-qdrant
@@ -11,4 +29,5 @@ services:
     # endpoint with, and nothing else in this file depends_on it.
 
 volumes:
+  postgres-data:
   qdrant-data:
