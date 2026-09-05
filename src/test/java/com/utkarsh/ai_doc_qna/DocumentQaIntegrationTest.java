@@ -24,6 +24,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -161,6 +162,30 @@ class DocumentQaIntegrationTest {
         assertThat(answer.citations().getFirst().snippet()).contains("hunter2");
     }
 
+    /**
+     * The one test that actually exercises the {@code document_id in [...]} Qdrant filter
+     * end-to-end, not just against a mock: the stub embedding returns the same constant vector for
+     * every chunk, so both documents match a corpus-wide search with score 1.0 — the only thing
+     * that can be excluding the note here is {@code documentIds} actually reaching Qdrant.
+     */
+    @Test
+    void askScopedToSelectedDocuments_shouldOnlyConsiderThoseDocuments() throws Exception {
+        UUID policyId = uploadPolicy();
+        UUID noteId = upload(new MockMultipartFile("file", "note.txt",
+                MediaType.TEXT_PLAIN_VALUE, "The wifi password is hunter2.".getBytes()));
+        awaitCompletion(policyId);
+        awaitCompletion(noteId);
+
+        chatResponses.reply("Up to three days per week.", true, "1");
+        AnswerResponse answer = qaService.ask("How many remote days are allowed?", user.userId(), List.of(policyId));
+
+        assertThat(answer.answerable()).isTrue();
+        assertThat(answer.citations()).hasSize(1);
+        assertThat(answer.citations().getFirst().documentId()).isEqualTo(policyId);
+        // The unselected document's text must never have reached the prompt.
+        assertThat(chatResponses.lastPrompt()).doesNotContain("hunter2");
+    }
+
     @Test
     void reuploadingTheSameContentIsRejected() throws Exception {
         awaitCompletion(uploadPolicy());
@@ -191,7 +216,7 @@ class DocumentQaIntegrationTest {
                         .isEqualTo(IngestionStatus.COMPLETED));
     }
 
-    /** Mirrors {@code RetrievalService.retrieveForDocument}'s filter, scoped to one document. */
+    /** Mirrors {@code RetrievalService.retrieveForDocuments}' filter, scoped to one document. */
     private int countChunks(UUID documentId) {
         return vectorStore.similaritySearch(SearchRequest.builder()
                         .query("count")

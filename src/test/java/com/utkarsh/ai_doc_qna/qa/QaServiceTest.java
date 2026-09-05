@@ -20,6 +20,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -177,7 +178,7 @@ class QaServiceTest {
     @Test
     void askAboutDocument_shouldScopeRetrievalToThatDocumentAndVerifyOwnership() {
         when(documentService.get(DOCUMENT_ID, OWNER_ID)).thenReturn(null);
-        when(retrievalService.retrieveForDocument(anyString(), any())).thenReturn(List.of(
+        when(retrievalService.retrieveForDocuments(anyString(), any())).thenReturn(List.of(
                 chunk("Core hours are 10:00 to 16:00.", 3, 0, 0.80)));
         when(answerGenerator.generate(anyString(), anyString()))
                 .thenReturn(new GroundedAnswer("Core hours are 10:00 to 16:00.", true, List.of(1)));
@@ -186,7 +187,47 @@ class QaServiceTest {
 
         assertThat(response.answerable()).isTrue();
         verify(documentService).get(DOCUMENT_ID, OWNER_ID);
-        verify(retrievalService).retrieveForDocument("What are core hours?", DOCUMENT_ID);
+        verify(retrievalService).retrieveForDocuments("What are core hours?", List.of(DOCUMENT_ID));
+    }
+
+    @Test
+    void ask_withSeveralDocumentIds_shouldVerifyOwnershipOfEachAndScopeRetrievalToAllOfThem() {
+        UUID secondDocumentId = UUID.fromString("22222222-3333-4444-5555-666666666666");
+        List<UUID> documentIds = List.of(DOCUMENT_ID, secondDocumentId);
+        when(documentService.get(any(), eq(OWNER_ID))).thenReturn(null);
+        when(retrievalService.retrieveForDocuments(anyString(), eq(documentIds))).thenReturn(List.of(
+                chunk("Core hours are 10:00 to 16:00.", 3, 0, 0.80)));
+        when(answerGenerator.generate(anyString(), anyString()))
+                .thenReturn(new GroundedAnswer("Core hours are 10:00 to 16:00.", true, List.of(1)));
+
+        AnswerResponse response = qaService.ask("What are core hours?", OWNER_ID, documentIds);
+
+        assertThat(response.answerable()).isTrue();
+        verify(documentService).get(DOCUMENT_ID, OWNER_ID);
+        verify(documentService).get(secondDocumentId, OWNER_ID);
+        verify(retrievalService).retrieveForDocuments("What are core hours?", documentIds);
+    }
+
+    @Test
+    void ask_withDocumentIdsWhereOneIsNotOwnedByCaller_shouldPropagateNotFoundWithoutRetrieving() {
+        UUID secondDocumentId = UUID.fromString("22222222-3333-4444-5555-666666666666");
+        when(documentService.get(DOCUMENT_ID, OWNER_ID)).thenReturn(null);
+        when(documentService.get(secondDocumentId, OWNER_ID))
+                .thenThrow(new com.utkarsh.ai_doc_qna.common.exception.DocumentNotFoundException(secondDocumentId));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        qaService.ask("anything", OWNER_ID, List.of(DOCUMENT_ID, secondDocumentId)))
+                .isInstanceOf(com.utkarsh.ai_doc_qna.common.exception.DocumentNotFoundException.class);
+        verifyNoInteractions(retrievalService, answerGenerator);
+    }
+
+    @Test
+    void ask_withEmptyDocumentIds_shouldBehaveLikeWholeCorpusSearch() {
+        when(retrievalService.retrieve(anyString(), any())).thenReturn(List.of());
+        when(documentService.corpusStatus(any())).thenReturn(new CorpusStatus(0, 0));
+
+        assertThat(qaService.ask("anything", OWNER_ID, List.of()).answer())
+                .contains("No documents have been uploaded");
     }
 
     @Test

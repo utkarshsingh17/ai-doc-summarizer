@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Explicit vector retrieval.
@@ -44,11 +45,14 @@ public class RetrievalService {
     }
 
     /**
-     * Searches only the given document's chunks. The caller is responsible for having already
-     * verified the requester owns that document — this filters by document, not by owner.
+     * Searches only the given documents' chunks. The caller is responsible for having already
+     * verified the requester owns every one of them — this filters by document, not by owner.
      */
-    public List<Document> retrieveForDocument(String question, UUID documentId) {
-        return search(question, "%s == '%s'".formatted(ChunkMetadata.DOCUMENT_ID, documentId));
+    public List<Document> retrieveForDocuments(String question, List<UUID> documentIds) {
+        String ids = documentIds.stream()
+                .map(id -> "'%s'".formatted(id))
+                .collect(Collectors.joining(", "));
+        return search(question, "%s in [%s]".formatted(ChunkMetadata.DOCUMENT_ID, ids));
     }
 
     private List<Document> search(String question, String filterExpression) {

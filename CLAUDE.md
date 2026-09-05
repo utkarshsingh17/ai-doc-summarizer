@@ -36,6 +36,23 @@ OPENAI_API_KEY=sk-... ./mvnw test -Dtest=RealOpenAiEndToEndTest   # real provide
 
 No linter or formatter is configured.
 
+## Deployment
+
+Backend on Render (`Dockerfile` + `render.yaml`), frontend on Vercel, Qdrant on Qdrant Cloud —
+see `README.md`'s Deployment section for the full env var list. Two things worth knowing if you
+touch this later:
+
+- **The frontend proxies `/api/*` to Render through a Vercel rewrite (`vercel.json`) instead of
+  calling it cross-origin.** Auth cookies are `SameSite=Lax` with no CSRF token (see below) — that
+  scheme only works when the browser sees everything as one origin. A cross-origin call from
+  `*.vercel.app` straight to `*.onrender.com` would never carry the cookie at all, no matter how
+  CORS is configured; `SameSite=Lax` blocks it before CORS is even consulted. Don't "fix" a
+  cross-origin auth failure by switching to `SameSite=None` without deliberately deciding to take
+  on real CSRF exposure — the proxy is what makes the existing no-CSRF-token design still correct.
+- **`server.port` reads `${PORT:8085}`.** Render assigns the listen port via `$PORT`; nothing sets
+  that locally, so local dev is unaffected. `GET /healthz` is unauthenticated on purpose — it's
+  Render's health check, and a platform prober isn't going to present a JWT cookie.
+
 ## Architecture
 
 Layered, grouped by feature. Controllers do HTTP only and call one service; domain objects never
@@ -191,10 +208,13 @@ That count runs only on the no-match path, so the populated-corpus path stays a 
 scoped to the caller, same as retrieval itself — another user's in-progress uploads must not change
 what this user is told.
 
-`QaService.askAboutDocument` follows the same shape but skips the corpus-status branching: a
-document scoped to one id is either owned by the caller (verified via `DocumentService.get`, which
-throws `DocumentNotFoundException` for someone else's document — existence is never leaked) or the
-question never reaches retrieval at all.
+`QaService.ask` takes an optional `documentIds` list (empty/null means the whole corpus).
+`askAboutDocument` is just `ask(question, ownerId, List.of(documentId))` — both skip the
+corpus-status branching: every requested id must be owned by the caller (verified one at a time
+via `DocumentService.get`, which throws `DocumentNotFoundException` for someone else's document —
+existence is never leaked), and retrieval is scoped to exactly those documents via
+`RetrievalService.retrieveForDocuments`, which builds a `document_id in [...]` filter expression —
+if any id fails ownership, retrieval never runs at all.
 
 ## Version traps in this stack
 

@@ -148,17 +148,25 @@ Poll `GET /api/v1/documents/{id}` until `status` is `COMPLETED` (or `FAILED`, wi
 
 ### Questions
 
-Two variants: the whole corpus, or one specific document.
+Three variants: the whole corpus, a hand-picked subset of documents, or one specific document.
 
 | Method | Path | Body | Notes |
 |---|---|---|---|
-| `POST` | `/api/v1/questions` | `{"question": "..."}` | Answers from every completed document the caller owns |
+| `POST` | `/api/v1/questions` | `{"question": "...", "documentIds": [...]}` | `documentIds` omitted or empty answers from every completed document the caller owns; a non-empty list scopes the answer to just those |
 | `POST` | `/api/v1/documents/{id}/questions` | `{"question": "..."}` | Answers from that one document only |
 
 ```bash
 curl -b cookies.txt -X POST localhost:8080/api/v1/questions \
   -H 'Content-Type: application/json' \
   -d '{"question":"How many days per week can I work remotely?"}'
+```
+
+```bash
+# Scoped to a subset — every id must belong to the caller, same 404-not-403 rule as any other
+# document endpoint.
+curl -b cookies.txt -X POST localhost:8080/api/v1/questions \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"How many days per week can I work remotely?","documentIds":["9f3c1a2e-..."]}'
 ```
 
 ```json
@@ -186,10 +194,12 @@ curl -b cookies.txt -X POST localhost:8080/api/v1/questions \
 ```
 
 `pageNumber` is always `null` — see [Ingestion](#ingestion). An out-of-corpus question returns
-`answerable: false` with empty `citations`. The refusal wording distinguishes three cases that
-look identical from the outside: nothing uploaded yet, documents still being embedded, and a
-corpus that genuinely does not cover the question. `POST /documents/{id}/questions` against a
-document you don't own returns 404, same as any other document endpoint.
+`answerable: false` with empty `citations`. When `documentIds` is empty, the refusal wording
+distinguishes three cases that look identical from the outside: nothing uploaded yet, documents
+still being embedded, and a corpus that genuinely does not cover the question; scoped to a
+specific `documentIds` subset (or `POST /documents/{id}/questions`), it's simply "not covered" —
+per-document status doesn't apply to a hand-picked set the same way. Either endpoint returns 404
+for a document you don't own, same as any other document endpoint.
 
 ### Errors
 
@@ -279,6 +289,31 @@ Tunables live under `app.*` in `application.yaml`:
 
 Raising `similarity-threshold` makes the system refuse more and hallucinate less; lowering it does
 the reverse.
+
+## Deployment
+
+Backend on [Render](https://render.com), frontend on [Vercel](https://vercel.com), Qdrant on
+[Qdrant Cloud](https://cloud.qdrant.io). The frontend proxies `/api/*` to Render through a Vercel
+rewrite (`ai-doc-qna-frontend/vercel.json`) rather than calling it cross-origin — the auth cookies
+are `SameSite=Lax` with no CSRF token, which only works when the browser sees one origin for
+everything. Don't switch the cookies to `SameSite=None` to "fix" a cross-origin failure instead;
+that removes the app's only CSRF defense.
+
+1. **Qdrant Cloud**: create a free cluster. You'll get a host like
+   `xyz-abc.us-east.aws.cloud.qdrant.io` (gRPC port 6334, TLS on) and an API key.
+2. **Render**: connect this repo, and it picks up `render.yaml` (a Docker-based web service,
+   health check at `/healthz`). Fill in the dashboard-only env vars it prompts for:
+   `OPENAI_API_KEY`, `JWT_SECRET` (a real random Base64 string, not the dev fallback),
+   `QDRANT_HOST` (from step 1, without the `https://`), `QDRANT_API_KEY`, and
+   `CORS_ALLOWED_ORIGINS` (your Vercel domain — belt-and-suspenders since the proxy means the
+   browser shouldn't call Render directly, but harmless to set). Note the assigned
+   `https://<name>.onrender.com` URL.
+3. **Vercel**: import `ai-doc-qna-frontend`. Update `vercel.json`'s rewrite `destination` to the
+   actual Render URL from step 2 if it differs from `ai-doc-qna-backend.onrender.com` (Render
+   appends a suffix if that name is already taken). Vercel auto-detects the Vite framework preset;
+   no build config or `VITE_API_BASE_URL` needed — same-origin is the production default.
+4. Render's free tier spins down after 15 minutes idle; the first request after that cold-starts
+   slowly (JVM boot + reconnecting to Qdrant Cloud).
 
 ## Notable constraints
 

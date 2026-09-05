@@ -58,20 +58,33 @@ public class QaService {
 
 
     public AnswerResponse ask(String question, UUID ownerId) {
-        List<Document> chunks = retrievalService.retrieve(question, ownerId);
-        return answer(question, chunks, () -> noMatchMessage(ownerId));
+        return ask(question, ownerId, List.of());
     }
 
     /**
-     * Same grounded-answer flow as {@link #ask}, narrowed to one document. {@code documentId}
-     * must belong to {@code ownerId} — {@link DocumentService#get} throws
+     * When {@code documentIds} is empty, answers from the caller's whole corpus, and the refusal
+     * wording distinguishes "nothing uploaded" from "still ingesting" from "not covered". When it
+     * isn't, every id must belong to {@code ownerId} — {@link DocumentService#get} throws
      * {@link com.utkarsh.ai_doc_qna.common.exception.DocumentNotFoundException} otherwise, which
-     * is also the correct response for "exists but is someone else's": existence is not leaked.
+     * is also the correct response for "exists but is someone else's": existence is not leaked —
+     * and retrieval is scoped to just those documents, with a plain "not covered" refusal since
+     * corpus-wide status ("nothing uploaded yet" etc.) doesn't apply to a hand-picked subset.
      */
-    public AnswerResponse askAboutDocument(String question, UUID documentId, UUID ownerId) {
-        documentService.get(documentId, ownerId);
-        List<Document> chunks = retrievalService.retrieveForDocument(question, documentId);
+    public AnswerResponse ask(String question, UUID ownerId, List<UUID> documentIds) {
+        if (documentIds == null || documentIds.isEmpty()) {
+            List<Document> chunks = retrievalService.retrieve(question, ownerId);
+            return answer(question, chunks, () -> noMatchMessage(ownerId));
+        }
+        for (UUID documentId : documentIds) {
+            documentService.get(documentId, ownerId);
+        }
+        List<Document> chunks = retrievalService.retrieveForDocuments(question, documentIds);
         return answer(question, chunks, () -> NO_MATCH_MESSAGE);
+    }
+
+    /** Same grounded-answer flow as {@link #ask}, narrowed to one document. */
+    public AnswerResponse askAboutDocument(String question, UUID documentId, UUID ownerId) {
+        return ask(question, ownerId, List.of(documentId));
     }
 
     private AnswerResponse answer(String question, List<Document> chunks, Supplier<String> noMatchMessage) {

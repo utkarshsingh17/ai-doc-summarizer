@@ -30,9 +30,12 @@ spring:
         model: text-embedding-3-small
     vectorstore:
       qdrant:
-        host: localhost
-        port: 6334   # gRPC, not the 6333 REST/dashboard port
-        use-tls: false
+        host: ${QDRANT_HOST:localhost}
+        port: ${QDRANT_PORT:6334}   # gRPC, not the 6333 REST/dashboard port
+        use-tls: ${QDRANT_USE_TLS:false}
+        # Blank locally (no auth on a local container); a managed instance (e.g. Qdrant Cloud)
+        # needs QDRANT_API_KEY set, or every request fails with an authentication error.
+        api-key: ${QDRANT_API_KEY:}
         collection-name: vector_store
         # The store creates its own collection (dimension 1536, cosine distance) on startup.
         # Users and document metadata live in Qdrant too (see QdrantCollectionsInitializer),
@@ -72,4 +75,6 @@ logging:
     com.utkarsh.ai_doc_qna: DEBUG
 
 server:
-  port: 8085
+  # Render (and most PaaS hosts) assign the listen port via $PORT at runtime; local dev keeps
+  # using 8085 since nothing sets that env var here.
+  port: ${PORT:8085}

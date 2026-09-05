@@ -23,6 +23,7 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import java.util.List;
 import java.util.UUID;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
@@ -58,7 +59,7 @@ class QaControllerTest {
     @Test
     void ask_withGroundedAnswer_shouldReturnAnswerAndCitations() throws Exception {
         UUID documentId = UUID.randomUUID();
-        when(qaService.ask(anyString(), eq(OWNER_ID))).thenReturn(new AnswerResponse(
+        when(qaService.ask(anyString(), eq(OWNER_ID), any())).thenReturn(new AnswerResponse(
                 "How many remote days?",
                 "Up to three days per week.",
                 true,
@@ -82,7 +83,7 @@ class QaControllerTest {
 
     @Test
     void ask_whenCorpusDoesNotCoverTheQuestion_shouldReturnUnanswerableWithNoCitations() throws Exception {
-        when(qaService.ask(anyString(), eq(OWNER_ID))).thenReturn(new AnswerResponse(
+        when(qaService.ask(anyString(), eq(OWNER_ID), any())).thenReturn(new AnswerResponse(
                 "Who won the 1998 World Cup?",
                 "I could not find anything about that in the uploaded documents.",
                 false, List.of(), 0));
@@ -94,6 +95,23 @@ class QaControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.answerable").value(false))
                 .andExpect(jsonPath("$.data.citations").isEmpty());
+    }
+
+    @Test
+    void ask_withDocumentIds_shouldPassThemThroughToTheService() throws Exception {
+        UUID first = UUID.fromString("11111111-1111-1111-1111-111111111111");
+        UUID second = UUID.fromString("22222222-2222-2222-2222-222222222222");
+        when(qaService.ask("What are core hours?", OWNER_ID, List.of(first, second)))
+                .thenReturn(new AnswerResponse("What are core hours?", "10:00 to 16:00.", true, List.of(), 1));
+
+        mockMvc.perform(post("/api/v1/questions")
+                        .with(auth())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"question":"What are core hours?","documentIds":["%s","%s"]}
+                                """.formatted(first, second)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.answerable").value(true));
     }
 
     @Test
@@ -109,7 +127,7 @@ class QaControllerTest {
 
     @Test
     void ask_whenProviderIsUnreachable_shouldReturn503() throws Exception {
-        when(qaService.ask(anyString(), eq(OWNER_ID)))
+        when(qaService.ask(anyString(), eq(OWNER_ID), any()))
                 .thenThrow(new AiServiceException("provider down", null, true));
 
         mockMvc.perform(post("/api/v1/questions")
@@ -122,7 +140,7 @@ class QaControllerTest {
 
     @Test
     void ask_whenProviderRejectsTheRequest_shouldReturn502() throws Exception {
-        when(qaService.ask(anyString(), eq(OWNER_ID)))
+        when(qaService.ask(anyString(), eq(OWNER_ID), any()))
                 .thenThrow(new AiServiceException("bad key", null, false));
 
         mockMvc.perform(post("/api/v1/questions")

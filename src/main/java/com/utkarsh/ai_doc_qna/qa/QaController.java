@@ -26,13 +26,14 @@ public class QaController {
 
 
     /**
-     * Answers from the caller's whole corpus. POST rather than GET: questions can be long enough
-     * to strain a query string, and the request body keeps them out of access logs.
+     * Answers from the caller's whole corpus, or from just {@code documentIds} when given. POST
+     * rather than GET: questions can be long enough to strain a query string, and the request
+     * body keeps them out of access logs.
      */
     @PostMapping("/questions")
     public ApiResponse<AnswerResponse> ask(@Valid @RequestBody AskQuestionRequest request,
                                            @AuthenticationPrincipal UserPrincipal principal) {
-        return ApiResponse.ok(qaService.ask(request.question(), principal.getId()));
+        return ApiResponse.ok(qaService.ask(request.question(), principal.getId(), request.documentIds()));
     }
 
     /**
